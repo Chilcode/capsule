@@ -380,6 +380,33 @@ textarea { min-height: 80px; resize: vertical; }
   line-height: 1;
   padding: 0;
 }
+.chip.is-active {
+  background: rgba(232, 180, 94, 0.18);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.feedback-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 1px solid var(--gold-dim);
+  color: var(--gold);
+  font-size: 1.25em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 15;
+  transition: transform 0.15s ease;
+}
+.feedback-fab:active {
+  transform: scale(0.9);
+}
 
 .title-card {
   display: flex;

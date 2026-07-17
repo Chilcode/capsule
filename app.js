@@ -81,19 +81,167 @@ async function syncQuestArtifact(q) {
   }
 }
 
-async function syncMafiaGame(m) {
+async function syncMafiaGameFromSession(session, participants) {
   if (!sb) return;
   try {
     await sb.from("mafia_games").insert({
       trip: state.tripName || "default",
-      players: state.campers.map((c) => ({ name: c.name, role: m.killerIds.includes(c.id) ? "killer" : "town" })),
-      eliminated: m.eliminated.map((e) => ({ name: camperName(e.camperId), round: e.round, phase: e.phase, wasKiller: e.wasKiller })),
-      winner: m.winner,
-      rounds: m.round,
+      players: participants.map((name) => ({ name, role: session.killer_names.includes(name) ? "killer" : "town" })),
+      eliminated: session.eliminated,
+      winner: session.winner,
+      rounds: session.round,
     });
+    fetchMafiaGames();
   } catch (e) {
-    // offline — game result stays local only for now
+    // offline — game result stays only in the live session for now
   }
+}
+
+let mafiaSession = null;
+
+async function fetchMafiaSession() {
+  if (!sb) return;
+  try {
+    const { data, error } = await sb
+      .from("mafia_session")
+      .select("*")
+      .eq("trip", state.tripName || "default")
+      .maybeSingle();
+    if (error) return;
+    mafiaSession = data || null;
+    if (activeTab === "mafia") render();
+  } catch (e) {}
+}
+
+function camperKey(name) {
+  return "c-" + (name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function addCamperLocal(name) {
+  const trimmed = (name || "").trim();
+  if (!trimmed) return null;
+  const id = camperKey(trimmed);
+  let camper = state.campers.find((c) => c.id === id);
+  if (!camper) {
+    camper = { id, name: trimmed };
+    state.campers.push(camper);
+    saveState();
+  }
+  syncCamper(trimmed);
+  return camper;
+}
+
+async function syncCamper(name) {
+  if (!sb) return;
+  try {
+    await sb.from("campers").insert({ trip: state.tripName || "default", name });
+  } catch (e) {
+    // duplicate name (already synced) or offline — either way, fine
+  }
+}
+
+async function removeCamperSync(name) {
+  if (!sb) return;
+  try {
+    await sb.from("campers").delete().eq("trip", state.tripName || "default").eq("name", name);
+  } catch (e) {}
+}
+
+let remoteArtifacts = [];
+let mafiaHistory = [];
+let feedbackList = [];
+
+async function fetchCampers() {
+  if (!sb) return;
+  try {
+    const { data, error } = await sb.from("campers").select("*").eq("trip", state.tripName || "default");
+    if (error) return;
+    let changed = false;
+    (data || []).forEach((row) => {
+      const id = camperKey(row.name);
+      if (!state.campers.find((c) => c.id === id)) {
+        state.campers.push({ id, name: row.name });
+        changed = true;
+      }
+    });
+    if (changed) {
+      saveState();
+      if (activeTab === "chores" || activeTab === "mafia") render();
+    }
+  } catch (e) {}
+}
+
+async function fetchQuestArtifacts() {
+  if (!sb) return;
+  try {
+    const { data, error } = await sb
+      .from("quest_artifacts")
+      .select("*")
+      .eq("trip", state.tripName || "default")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) return;
+    remoteArtifacts = data || [];
+    if (activeTab === "capsule") render();
+  } catch (e) {}
+}
+
+async function fetchMafiaGames() {
+  if (!sb) return;
+  try {
+    const { data, error } = await sb
+      .from("mafia_games")
+      .select("*")
+      .eq("trip", state.tripName || "default")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) return;
+    mafiaHistory = data || [];
+    if (activeTab === "mafia") render();
+  } catch (e) {}
+}
+
+async function fetchFeedback() {
+  if (!sb) return;
+  try {
+    const { data, error } = await sb
+      .from("feedback")
+      .select("*")
+      .eq("trip", state.tripName || "default")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) return;
+    feedbackList = data || [];
+    if (activeTab === "settings") render();
+  } catch (e) {}
+}
+
+async function submitFeedback(category, message) {
+  feedbackList = [
+    { camper_name: state.keeperName || "Someone", category, message, created_at: new Date().toISOString() },
+    ...feedbackList,
+  ];
+  if (!sb) return;
+  try {
+    await sb.from("feedback").insert({
+      trip: state.tripName || "default",
+      camper_name: state.keeperName || "Someone",
+      category,
+      message,
+    });
+    fetchFeedback();
+  } catch (e) {}
+}
+
+async function syncAll() {
+  await Promise.all([
+    fetchPointEvents(),
+    fetchCampers(),
+    fetchQuestArtifacts(),
+    fetchMafiaGames(),
+    fetchMafiaSession(),
+    fetchFeedback(),
+  ]);
 }
 
 function timeAgo(ts) {
@@ -155,6 +303,42 @@ const DEFAULT_QUESTS = [
     tag: "brave",
     desc: "Do something kind for a stranger. No credit necessary.",
   },
+  {
+    id: "cliff-send",
+    title: "Cliff Send",
+    tag: "brave",
+    desc: "Jump off the cliff (safely). Capture someone's face mid-air — yours or theirs.",
+  },
+  {
+    id: "river-story",
+    title: "River Story",
+    tag: "connect",
+    desc: "While floating, ask someone about a time they almost gave up on something. Remember what they said.",
+  },
+  {
+    id: "teach-something",
+    title: "Teach Something",
+    tag: "build",
+    desc: "Teach someone here a skill you know — a knot, a card trick, changing a tire. Anything.",
+  },
+  {
+    id: "the-toast",
+    title: "The Toast",
+    tag: "connect",
+    desc: "Raise a toast to someone here, out loud, for a specific reason. Not just \"cheers.\"",
+  },
+  {
+    id: "old-story-new-ears",
+    title: "Old Story, New Ears",
+    tag: "connect",
+    desc: "Tell the whole version of a story from before this group knew each other — not the short version.",
+  },
+  {
+    id: "night-sky",
+    title: "Night Sky",
+    tag: "capture",
+    desc: "Step away from the fire for five minutes and look up. Write down one thing it made you think about.",
+  },
 ];
 
 const CHORES = [
@@ -174,6 +358,14 @@ const CHORES = [
   { id: "break-down-camp", label: "Break down camp / load out", category: "setup" },
 ];
 
+const FEEDBACK_CATEGORIES = [
+  { id: "bug", label: "🐛 Bug" },
+  { id: "idea", label: "💡 Idea" },
+  { id: "love", label: "❤️ Love" },
+  { id: "other", label: "💬 Other" },
+];
+const FEEDBACK_ICON = { bug: "🐛", idea: "💡", love: "❤️", other: "💬" };
+
 const TITLE_DEFS = [
   { category: "cleanup", categoryLabel: "Cleanup", title: "Most Cleanly Camper" },
   { category: "fire", categoryLabel: "Fire", title: "Fire Keeper" },
@@ -187,7 +379,6 @@ const TITLE_DEFS = [
 let state = loadState();
 let activeTab = "quests";
 let openQuestId = null;
-let mafiaRevealShown = false;
 
 function loadState() {
   try {
@@ -196,7 +387,14 @@ function loadState() {
       const parsed = JSON.parse(raw);
       if (!parsed.campers) parsed.campers = [];
       if (!parsed.choreLog) parsed.choreLog = [];
-      if (parsed.mafia === undefined) parsed.mafia = null;
+      if (!parsed.peekedRemote) parsed.peekedRemote = [];
+      delete parsed.mafia;
+      if (parsed.quests) {
+        const existingIds = new Set(parsed.quests.map((q) => q.id));
+        DEFAULT_QUESTS.forEach((q) => {
+          if (!existingIds.has(q.id)) parsed.quests.push({ ...q, status: "available", artifact: null });
+        });
+      }
       return parsed;
     }
   } catch (e) {}
@@ -207,7 +405,7 @@ function loadState() {
     quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
     campers: [],
     choreLog: [],
-    mafia: null,
+    peekedRemote: [],
   };
 }
 
@@ -313,33 +511,68 @@ function renderQuests() {
 }
 
 function renderCapsule() {
-  const items = state.quests.filter((q) => q.artifact);
-  if (!items.length) {
-    return `<div class="empty">Nothing sealed yet.<br>Complete a quest to add the first artifact to the capsule.</div>`;
-  }
   const now = Date.now();
+
+  const localItems = state.quests
+    .filter((q) => q.artifact)
+    .map((q) => ({
+      title: q.title,
+      by: q.artifact.by || "a keeper",
+      note: q.artifact.note,
+      photo: q.artifact.photo,
+      unlockAt: q.artifact.unlockAt,
+      completedAt: q.artifact.completedAt,
+      sealed: q.artifact.unlockAt > now,
+      peeked: q.artifact.peeked,
+      spendTarget: q.id,
+    }));
+
+  const mine = new Set(
+    state.quests.filter((q) => q.artifact).map((q) => `${state.keeperName}::${q.id}`)
+  );
+
+  const remoteItems = remoteArtifacts
+    .filter((a) => !mine.has(`${a.camper_name}::${a.quest_id}`))
+    .map((a) => {
+      const unlockAt = new Date(a.unlock_at).getTime();
+      return {
+        title: a.quest_title,
+        by: a.camper_name,
+        note: a.note,
+        photo: a.photo,
+        unlockAt,
+        completedAt: new Date(a.created_at).getTime(),
+        sealed: unlockAt > now,
+        peeked: state.peekedRemote.includes(a.id),
+        spendTarget: `remote:${a.id}`,
+      };
+    });
+
+  const items = [...localItems, ...remoteItems].sort((a, b) => b.completedAt - a.completedAt);
+
+  if (!items.length) {
+    return `<div class="empty">Nothing sealed yet — by anyone on this trip.<br>Complete a quest to add the first artifact to the capsule.</div>`;
+  }
+
   return items
-    .map((q) => {
-      const a = q.artifact;
-      const sealed = a.unlockAt > now;
-      const peeked = a.peeked;
-      const showContent = !sealed || peeked;
+    .map((a) => {
+      const showContent = !a.sealed || a.peeked;
       return `
-      <div class="artifact-card ${sealed && !peeked ? "is-sealed" : ""}">
+      <div class="artifact-card ${a.sealed && !a.peeked ? "is-sealed" : ""}">
         <div class="artifact-head">
-          <span class="artifact-quest">${q.title}</span>
-          <span class="lock-badge">${sealed ? "🔒 opens " + fmtDate(a.unlockAt) : "🔓 unlocked " + fmtDate(a.unlockAt)}</span>
+          <span class="artifact-quest">${escapeHtml(a.title)}</span>
+          <span class="lock-badge">${a.sealed ? "🔒 opens " + fmtDate(a.unlockAt) : "🔓 unlocked " + fmtDate(a.unlockAt)}</span>
         </div>
         ${
           showContent
             ? `
           ${a.photo ? `<img class="artifact-photo" src="${a.photo}" alt="">` : ""}
           <div class="artifact-note">${escapeHtml(a.note) || "<i>No note left.</i>"}</div>
-          <div class="artifact-meta">${state.tripName || "Untitled trip"} · sealed ${fmtDate(a.completedAt)}</div>
+          <div class="artifact-meta">${escapeHtml(a.by)} · ${state.tripName || "Untitled trip"} · sealed ${fmtDate(a.completedAt)}</div>
         `
             : `
-          <div class="seal-note">Sealed by ${escapeHtml(a.by) || "a keeper"} on ${fmtDate(a.completedAt)}. Come back on the unlock date to open it.</div>
-          <button class="ghost peek-btn" data-spend="${q.id}">Spend ${CAPSULE_UNLOCK_COST} points to open early</button>
+          <div class="seal-note">Sealed by ${escapeHtml(a.by)} on ${fmtDate(a.completedAt)}. Come back on the unlock date to open it.</div>
+          <button class="ghost peek-btn" data-spend="${a.spendTarget}">Spend ${CAPSULE_UNLOCK_COST} points to open early</button>
         `
         }
       </div>`;
@@ -508,6 +741,16 @@ function renderBoard() {
 
 function renderTrip() {
   const { done, total, level } = levelInfo();
+  const feedbackRows = feedbackList
+    .slice(0, 15)
+    .map(
+      (f) => `
+    <div class="log-row">
+      <span>${FEEDBACK_ICON[f.category] || "💬"} ${escapeHtml(f.camper_name)} — ${escapeHtml(f.message)}</span>
+      <span>${timeAgo(f.created_at)}</span>
+    </div>`
+    )
+    .join("");
   return `
     <h2 class="section-title">This trip</h2>
     <div class="trip-card">
@@ -522,11 +765,15 @@ function renderTrip() {
       <div class="stat-row"><span>Quests sealed</span><span class="stat-val">${done} / ${total}</span></div>
       <div class="stat-row"><span>Started</span><span class="stat-val">${fmtDate(state.createdAt)}</span></div>
     </div>
+    <h2 class="section-title">Feedback</h2>
+    <div class="trip-card">
+      ${feedbackRows || `<div class="empty" style="padding:6px 0;">Nothing yet — tap the 💬 button anytime to leave feedback.</div>`}
+    </div>
     <h2 class="section-title">Reset</h2>
     <div class="trip-card">
       <button class="danger" id="resetBtn">Start a new trip (clears this capsule)</button>
     </div>
-    <div class="empty" style="text-align:left;padding:10px 4px;">Points from Quests, Camp chores, and Mafia sync to everyone's phone when you're online — check the <b>Board</b> tab. Sealed memories (notes/photos) and Mafia game results are also backed up to the cloud so this whole trip survives even if this phone doesn't. The camper list itself is still local to each device.</div>
+    <div class="empty" style="text-align:left;padding:10px 4px;">Quests, Camp chores, Mafia, and Capsule all sync live to everyone's phone now — check the <b>Board</b> tab for the shared scoreboard. The camper roster syncs too; only which quests/chores you've marked "peeked" stays local to this device.</div>
   `;
 }
 
@@ -539,81 +786,110 @@ function shuffle(arr) {
   return a;
 }
 
-function camperName(id) {
-  const c = state.campers.find((x) => x.id === id);
-  return c ? c.name : "Unknown";
+function mafiaParticipants(session) {
+  return Array.from(new Set([...session.alive_names, ...session.eliminated.map((e) => e.name)]));
 }
 
-function mafiaCheckWin(m) {
-  const aliveKillers = m.aliveIds.filter((id) => m.killerIds.includes(id)).length;
-  const aliveTown = m.aliveIds.length - aliveKillers;
-  if (aliveKillers === 0) return "town";
-  if (aliveKillers >= aliveTown) return "mafia";
-  return null;
-}
-
-function startMafiaGame(killerCount) {
-  const ids = state.campers.map((c) => c.id);
-  state.mafia = {
-    phase: "reveal",
+async function startMafiaGame(killerCount) {
+  if (!sb) {
+    toast("Mafia plays live across phones now — needs a connection to start");
+    return;
+  }
+  const names = state.campers.map((c) => c.name);
+  const session = {
+    trip: state.tripName || "default",
+    phase: "night",
     round: 1,
-    killerIds: shuffle(ids).slice(0, killerCount),
-    aliveIds: ids.slice(),
+    killer_names: shuffle(names).slice(0, killerCount),
+    alive_names: names,
     eliminated: [],
-    revealOrder: shuffle(ids),
-    revealIndex: 0,
     winner: null,
   };
-  mafiaRevealShown = false;
-  saveState();
-  render();
+  try {
+    await sb.from("mafia_session").upsert(session, { onConflict: "trip" });
+    mafiaSession = session;
+    render();
+  } catch (e) {
+    toast("Couldn't start the game — check your connection");
+  }
 }
 
-function mafiaEliminate(camperId, phase) {
-  const m = state.mafia;
-  m.aliveIds = m.aliveIds.filter((id) => id !== camperId);
-  m.eliminated.push({ camperId, round: m.round, phase, wasKiller: m.killerIds.includes(camperId) });
-  const winner = mafiaCheckWin(m);
+async function mafiaEliminate(name, phase) {
+  if (!mafiaSession) return;
+  const aliveNames = mafiaSession.alive_names.filter((n) => n !== name);
+  const wasKiller = mafiaSession.killer_names.includes(name);
+  const eliminated = [...mafiaSession.eliminated, { name, round: mafiaSession.round, phase, wasKiller }];
+  const aliveKillers = aliveNames.filter((n) => mafiaSession.killer_names.includes(n)).length;
+  const aliveTown = aliveNames.length - aliveKillers;
+  const winner = aliveKillers === 0 ? "town" : aliveKillers >= aliveTown ? "mafia" : null;
+
+  let nextPhase, nextRound;
   if (winner) {
-    m.winner = winner;
-    m.phase = "over";
-    const winningIds = state.campers
-      .map((c) => c.id)
-      .filter((id) => (winner === "mafia" ? m.killerIds.includes(id) : !m.killerIds.includes(id)));
-    winningIds.forEach((id) => {
-      addPoints(camperName(id), POINTS.mafiaWin, "mafia", winner === "mafia" ? "Killers won the round" : "Town found the Killers");
-    });
-    syncMafiaGame(m);
+    nextPhase = "over";
+    nextRound = mafiaSession.round;
   } else if (phase === "night") {
-    m.phase = "day";
+    nextPhase = "day";
+    nextRound = mafiaSession.round;
   } else {
-    m.phase = "night";
-    m.round += 1;
+    nextPhase = "night";
+    nextRound = mafiaSession.round + 1;
   }
-  saveState();
+
+  const next = { ...mafiaSession, alive_names: aliveNames, eliminated, phase: nextPhase, round: nextRound, winner };
+  mafiaSession = next;
   render();
+
+  if (sb) {
+    try {
+      await sb
+        .from("mafia_session")
+        .update({ alive_names: next.alive_names, eliminated: next.eliminated, phase: next.phase, round: next.round, winner: next.winner })
+        .eq("trip", state.tripName || "default");
+    } catch (e) {}
+  }
+
+  if (winner) {
+    const participants = mafiaParticipants(next);
+    const winningNames = participants.filter((n) =>
+      winner === "mafia" ? next.killer_names.includes(n) : !next.killer_names.includes(n)
+    );
+    winningNames.forEach((n) => {
+      addPoints(n, POINTS.mafiaWin, "mafia", winner === "mafia" ? "Killers won the round" : "Town found the Killers");
+    });
+    syncMafiaGameFromSession(next, participants);
+  }
 }
 
-function mafiaSkip(phase) {
-  const m = state.mafia;
-  if (phase === "night") {
-    m.phase = "day";
-  } else {
-    m.phase = "night";
-    m.round += 1;
+async function mafiaSkip(phase) {
+  if (!mafiaSession) return;
+  const nextPhase = phase === "night" ? "day" : "night";
+  const nextRound = phase === "night" ? mafiaSession.round : mafiaSession.round + 1;
+  mafiaSession = { ...mafiaSession, phase: nextPhase, round: nextRound };
+  render();
+  if (sb) {
+    try {
+      await sb.from("mafia_session").update({ phase: nextPhase, round: nextRound }).eq("trip", state.tripName || "default");
+    } catch (e) {}
   }
-  saveState();
+}
+
+async function mafiaNewGame() {
+  if (sb) {
+    try {
+      await sb.from("mafia_session").delete().eq("trip", state.tripName || "default");
+    } catch (e) {}
+  }
+  mafiaSession = null;
   render();
 }
 
 function renderMafia() {
-  const m = state.mafia;
-  if (!m) return renderMafiaSetup();
-  if (m.phase === "reveal") return renderMafiaReveal(m);
-  if (m.phase === "night") return renderMafiaPhase(m, "night");
-  if (m.phase === "day") return renderMafiaPhase(m, "day");
-  if (m.phase === "over") return renderMafiaOver(m);
-  return renderMafiaSetup();
+  if (!sb) {
+    return `<div class="empty">Mafia plays live across everyone's phone now, which needs a connection. This tab will come alive once you're online.</div>`;
+  }
+  if (!mafiaSession) return renderMafiaSetup();
+  if (mafiaSession.phase === "over") return renderMafiaOver(mafiaSession);
+  return renderMafiaPhase(mafiaSession, mafiaSession.phase);
 }
 
 function renderMafiaSetup() {
@@ -623,14 +899,29 @@ function renderMafiaSetup() {
     state.campers.map((c) => `<span class="chip">${escapeHtml(c.name)}</span>`).join("") ||
     `<span class="empty" style="padding:0;">No campers yet — add some in the Camp tab.</span>`;
   const canStart = count >= 3;
+
+  const historyRows = mafiaHistory
+    .map((g) => {
+      const killers = (g.players || [])
+        .filter((p) => p.role === "killer")
+        .map((p) => p.name)
+        .join(", ");
+      return `
+      <div class="log-row">
+        <span>${g.winner === "mafia" ? "🔪 Killers" : "🏆 Town"} won · ${g.rounds} round${g.rounds === 1 ? "" : "s"} · killers were ${escapeHtml(killers)}</span>
+        <span>${timeAgo(g.created_at)}</span>
+      </div>`;
+    })
+    .join("");
+
   return `
     <h2 class="section-title">Mafia</h2>
     <div class="trip-card">
       <div class="chip-row">${chips}</div>
       <div class="empty" style="text-align:left;padding:10px 0 0;">
-        Some of you are secretly Killers. Pass one phone around — each player privately
-        sees their own role, then hides it and passes it on. Killers try not to get caught;
-        everyone else tries to catch them before it's too late.
+        Some of you are secretly Killers. Once it starts, everyone opens Mafia on their
+        own phone and sees their own role there — no passing anything around. Killers try
+        not to get caught; everyone else tries to catch them before it's too late.
       </div>
       <label class="field-label">How many Killers?</label>
       <input type="number" id="mafiaKillerCount" value="${suggested}" min="1" max="${Math.max(1, count - 1)}">
@@ -639,66 +930,51 @@ function renderMafiaSetup() {
       </div>
       ${canStart ? "" : `<div class="empty" style="text-align:left;padding:10px 0 0;">Need at least 3 campers — add them in the Camp tab first.</div>`}
     </div>
+    ${historyRows ? `<h2 class="section-title">Past games (all phones)</h2><div class="trip-card">${historyRows}</div>` : ""}
   `;
 }
 
-function renderMafiaReveal(m) {
-  const id = m.revealOrder[m.revealIndex];
-  const name = camperName(id);
-  const isKiller = m.killerIds.includes(id);
-
-  if (!mafiaRevealShown) {
-    return `
-      <h2 class="section-title">Pass the phone</h2>
-      <div class="trip-card" style="text-align:center;">
-        <div class="title-name" style="font-size:1.2em;margin-bottom:10px;">Hand the phone to<br>${escapeHtml(name)}</div>
-        <div class="empty" style="padding:6px 0 16px;">Everyone else look away.</div>
-        <button class="primary" id="mafiaRevealBtn">I'm ${escapeHtml(name)} — show my role</button>
-      </div>
-      <div class="empty" style="text-align:left;padding:14px 4px 0;">${m.revealIndex + 1} of ${m.revealOrder.length} players</div>
-    `;
-  }
-
-  return `
-    <h2 class="section-title">Your role</h2>
-    <div class="trip-card role-card" style="text-align:center;border-color:${isKiller ? "#d98080" : "var(--gold-dim)"};">
-      <div style="font-size:2.5em;margin-bottom:6px;">${isKiller ? "🔪" : "👤"}</div>
-      <div class="title-name" style="font-size:1.15em;">${isKiller ? "You are a Killer" : "You are a Townsperson"}</div>
-      <div class="empty" style="padding:8px 0 16px;">${
-        isKiller
-          ? "Blend in. You and any other Killers secretly choose a target each night."
-          : "Find the Killers before they find you."
-      }</div>
-      <button class="ghost" id="mafiaNextBtn">Hide it — pass to the next player</button>
-    </div>
-  `;
-}
-
-function renderMafiaPhase(m, phaseName) {
+function renderMafiaPhase(session, phaseName) {
   const isNight = phaseName === "night";
-  const aliveRows = m.aliveIds
+  const participants = mafiaParticipants(session);
+  const isPlayer = !!state.keeperName && participants.includes(state.keeperName);
+  const isKiller = isPlayer && session.killer_names.includes(state.keeperName);
+
+  const roleCard = isPlayer
+    ? `
+    <div class="trip-card role-card" style="text-align:center;border-color:${isKiller ? "#d98080" : "var(--gold-dim)"};margin-bottom:16px;">
+      <div style="font-size:2em;margin-bottom:4px;">${isKiller ? "🔪" : "👤"}</div>
+      <div class="title-name" style="font-size:1.05em;">${isKiller ? "You are a Killer" : "You are a Townsperson"}</div>
+      <div class="empty" style="padding:4px 0 0;">${
+        isKiller ? "Blend in. Killers pick a target together each night." : "Find the Killers before they find you."
+      }</div>
+    </div>`
+    : `<div class="empty" style="padding:12px;margin-bottom:16px;border:1px dashed var(--card-border);border-radius:12px;text-align:left;">You're not in this round — set your name in the <b>Trip</b> tab before the next game starts to play.</div>`;
+
+  const aliveRows = session.alive_names
     .map(
-      (id) => `
+      (name) => `
     <div class="chore-row">
-      <div class="chore-label">${escapeHtml(camperName(id))}</div>
-      <button class="danger" data-eliminate="${id}">${isNight ? "Killed" : "Voted out"}</button>
+      <div class="chore-label">${escapeHtml(name)}</div>
+      <button class="danger" data-eliminate="${escapeAttr(name)}">${isNight ? "Killed" : "Voted out"}</button>
     </div>`
     )
     .join("");
 
-  const eliminatedRows = m.eliminated
+  const eliminatedRows = session.eliminated
     .slice()
     .reverse()
     .map(
       (e) => `
     <div class="log-row">
-      <span>${escapeHtml(camperName(e.camperId))} — ${e.wasKiller ? "was a Killer 🔪" : "was a Townsperson 👤"} (${e.phase}, round ${e.round})</span>
+      <span>${escapeHtml(e.name)} — ${e.wasKiller ? "was a Killer 🔪" : "was a Townsperson 👤"} (${e.phase}, round ${e.round})</span>
     </div>`
     )
     .join("");
 
   return `
-    <h2 class="section-title">Round ${m.round} — ${isNight ? "Night" : "Day"}</h2>
+    ${roleCard}
+    <h2 class="section-title">Round ${session.round} — ${isNight ? "Night" : "Day"}</h2>
     <div class="trip-card">
       <div class="empty" style="text-align:left;padding:0;">
         ${
@@ -708,7 +984,7 @@ function renderMafiaPhase(m, phaseName) {
         }
       </div>
     </div>
-    <h2 class="section-title">${m.aliveIds.length} alive</h2>
+    <h2 class="section-title">${session.alive_names.length} alive</h2>
     ${aliveRows}
     <div class="trip-card">
       <button class="ghost" id="mafiaSkipBtn">${isNight ? "No one was killed" : "Skip the vote"}</button>
@@ -717,13 +993,13 @@ function renderMafiaPhase(m, phaseName) {
   `;
 }
 
-function renderMafiaOver(m) {
-  const killers = m.killerIds.map((id) => camperName(id)).join(", ");
+function renderMafiaOver(session) {
+  const killers = session.killer_names.join(", ");
   return `
     <h2 class="section-title">Game over</h2>
-    <div class="trip-card" style="text-align:center;border-color:${m.winner === "mafia" ? "#d98080" : "var(--gold-dim)"};">
-      <div style="font-size:2.5em;margin-bottom:6px;">${m.winner === "mafia" ? "🔪" : "🏆"}</div>
-      <div class="title-name" style="font-size:1.2em;">${m.winner === "mafia" ? "The Killers win" : "The Townspeople win"}</div>
+    <div class="trip-card" style="text-align:center;border-color:${session.winner === "mafia" ? "#d98080" : "var(--gold-dim)"};">
+      <div style="font-size:2.5em;margin-bottom:6px;">${session.winner === "mafia" ? "🔪" : "🏆"}</div>
+      <div class="title-name" style="font-size:1.2em;">${session.winner === "mafia" ? "The Killers win" : "The Townspeople win"}</div>
       <div class="empty" style="padding:10px 0;">Killers were: ${escapeHtml(killers)}</div>
       <button class="primary" id="mafiaNewGameBtn">Play again</button>
     </div>
@@ -754,6 +1030,7 @@ function wireTabContent() {
     keeperInput.onchange = () => {
       state.keeperName = keeperInput.value.trim();
       saveState();
+      if (state.keeperName) addCamperLocal(state.keeperName);
     };
   }
   const resetBtn = document.getElementById("resetBtn");
@@ -767,7 +1044,7 @@ function wireTabContent() {
         quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
         campers: [],
         choreLog: [],
-        mafia: null,
+        peekedRemote: [],
       };
       saveState();
       activeTab = "quests";
@@ -781,9 +1058,11 @@ function wireTabContent() {
   document.querySelectorAll("[data-remove-camper]").forEach((btn) => {
     btn.onclick = () => {
       const id = btn.dataset.removeCamper;
+      const camper = state.campers.find((c) => c.id === id);
       state.campers = state.campers.filter((c) => c.id !== id);
       state.choreLog = state.choreLog.filter((e) => e.camperId !== id);
       saveState();
+      if (camper) removeCamperSync(camper.name);
       render();
     };
   });
@@ -799,11 +1078,7 @@ function wireTabContent() {
   if (addCamperBtn) {
     addCamperBtn.onclick = () => {
       const input = document.getElementById("newCamperName2");
-      const name = input.value.trim();
-      if (!name) return;
-      state.campers.push({ id: `c-${Date.now()}`, name });
-      saveState();
-      render();
+      if (addCamperLocal(input.value)) render();
     };
   }
 
@@ -815,39 +1090,21 @@ function wireTabContent() {
       startMafiaGame(count);
     };
   }
-  const mafiaRevealBtn = document.getElementById("mafiaRevealBtn");
-  if (mafiaRevealBtn) {
-    mafiaRevealBtn.onclick = () => {
-      mafiaRevealShown = true;
-      render();
-    };
-  }
-  const mafiaNextBtn = document.getElementById("mafiaNextBtn");
-  if (mafiaNextBtn) {
-    mafiaNextBtn.onclick = () => {
-      const m = state.mafia;
-      m.revealIndex += 1;
-      mafiaRevealShown = false;
-      if (m.revealIndex >= m.revealOrder.length) m.phase = "night";
-      saveState();
-      render();
-    };
-  }
   document.querySelectorAll("[data-eliminate]").forEach((btn) => {
-    btn.onclick = () => mafiaEliminate(btn.dataset.eliminate, state.mafia.phase);
+    btn.onclick = () => mafiaEliminate(btn.dataset.eliminate, mafiaSession.phase);
   });
   const mafiaSkipBtn = document.getElementById("mafiaSkipBtn");
   if (mafiaSkipBtn) {
-    mafiaSkipBtn.onclick = () => mafiaSkip(state.mafia.phase);
+    mafiaSkipBtn.onclick = () => mafiaSkip(mafiaSession.phase);
   }
   const mafiaNewGameBtn = document.getElementById("mafiaNewGameBtn");
   if (mafiaNewGameBtn) {
-    mafiaNewGameBtn.onclick = () => {
-      state.mafia = null;
-      saveState();
-      render();
-    };
+    mafiaNewGameBtn.onclick = () => mafiaNewGame();
   }
+}
+
+function closeAnyModal() {
+  document.querySelectorAll(".modal-backdrop").forEach((el) => el.remove());
 }
 
 function renderQuestModal(questId) {
@@ -856,6 +1113,7 @@ function renderQuestModal(questId) {
     openQuestId = null;
     return;
   }
+  closeAnyModal();
   const wrap = document.createElement("div");
   wrap.className = "modal-backdrop";
   wrap.innerHTML = `
@@ -925,6 +1183,7 @@ function renderQuestModal(questId) {
 function openCamperPicker(choreId) {
   const chore = CHORES.find((c) => c.id === choreId);
   if (!chore) return;
+  closeAnyModal();
 
   const wrap = document.createElement("div");
   wrap.className = "modal-backdrop";
@@ -972,10 +1231,7 @@ function openCamperPicker(choreId) {
 
   wrap.querySelector("#addCamperInline").onclick = () => {
     const input = wrap.querySelector("#newCamperName");
-    const name = input.value.trim();
-    if (!name) return;
-    state.campers.push({ id: `c-${Date.now()}`, name });
-    saveState();
+    if (!addCamperLocal(input.value)) return;
     document.body.removeChild(wrap);
     render();
     openCamperPicker(choreId);
@@ -986,16 +1242,21 @@ function openCamperPicker(choreId) {
   };
 }
 
-function openSpendPicker(questId) {
-  const q = state.quests.find((x) => x.id === questId);
-  if (!q) return;
+function openSpendPicker(target) {
+  const isRemote = typeof target === "string" && target.indexOf("remote:") === 0;
+  const remoteId = isRemote ? target.slice(7) : null;
+  const q = isRemote ? null : state.quests.find((x) => x.id === target);
+  const remoteArt = isRemote ? remoteArtifacts.find((a) => a.id === remoteId) : null;
+  if (!q && !remoteArt) return;
+  const title = isRemote ? remoteArt.quest_title : q.title;
+  closeAnyModal();
 
   const wrap = document.createElement("div");
   wrap.className = "modal-backdrop";
   wrap.innerHTML = `
     <div class="modal-sheet">
       <div class="modal-title">Spend ${CAPSULE_UNLOCK_COST} points</div>
-      <div class="modal-sub">Whose points are paying to open "${escapeHtml(q.title)}" early?</div>
+      <div class="modal-sub">Whose points are paying to open "${escapeHtml(title)}" early?</div>
       <div class="chip-row">
         ${
           state.campers
@@ -1021,8 +1282,12 @@ function openSpendPicker(questId) {
       toast(`${name} only has ${balance} points — needs ${CAPSULE_UNLOCK_COST}`);
       return;
     }
-    addPoints(name, -CAPSULE_UNLOCK_COST, "capsule_spend", `Opened "${q.title}" early`);
-    q.artifact.peeked = true;
+    addPoints(name, -CAPSULE_UNLOCK_COST, "capsule_spend", `Opened "${title}" early`);
+    if (isRemote) {
+      state.peekedRemote.push(remoteId);
+    } else {
+      q.artifact.peeked = true;
+    }
     saveState();
     document.body.removeChild(wrap);
     render();
@@ -1042,6 +1307,45 @@ function openSpendPicker(questId) {
 
   wrap.querySelector("#spendCancel").onclick = () => {
     document.body.removeChild(wrap);
+  };
+}
+
+function openFeedbackModal() {
+  closeAnyModal();
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <div class="modal-title">Feedback</div>
+      <div class="modal-sub">Bug, idea, or just a reaction — anything helps, and everyone can see what's already been said.</div>
+      <div class="chip-row">
+        ${FEEDBACK_CATEGORIES.map((c, i) => `<button class="chip ${i === 0 ? "is-active" : ""}" data-fb-cat="${c.id}">${c.label}</button>`).join("")}
+      </div>
+      <label class="field-label">What's on your mind?</label>
+      <textarea id="fbMessage" placeholder="Type it out..."></textarea>
+      <div class="modal-actions">
+        <button class="ghost" id="fbCancel">Cancel</button>
+        <button class="primary" id="fbSubmit">Send</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+
+  let category = FEEDBACK_CATEGORIES[0].id;
+  wrap.querySelectorAll("[data-fb-cat]").forEach((btn) => {
+    btn.onclick = () => {
+      category = btn.dataset.fbCat;
+      wrap.querySelectorAll("[data-fb-cat]").forEach((b) => b.classList.toggle("is-active", b === btn));
+    };
+  });
+
+  wrap.querySelector("#fbCancel").onclick = () => wrap.remove();
+  wrap.querySelector("#fbSubmit").onclick = () => {
+    const message = wrap.querySelector("#fbMessage").value.trim();
+    if (!message) return;
+    submitFeedback(category, message);
+    wrap.remove();
+    toast("Feedback sent — thanks!");
   };
 }
 
@@ -1090,9 +1394,12 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
   };
 });
 
+const feedbackFab = document.getElementById("feedbackFab");
+if (feedbackFab) feedbackFab.onclick = () => openFeedbackModal();
+
 render();
-fetchPointEvents();
-setInterval(fetchPointEvents, 7000);
+syncAll();
+setInterval(syncAll, 7000);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
