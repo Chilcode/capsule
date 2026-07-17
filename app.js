@@ -1,5 +1,56 @@
 const STORAGE_KEY = "capsule.state.v1";
 
+const SUPABASE_URL = "https://ivksvocciabqjzeyuxxd.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_T3te-0JZ9g35P-ElTOdFZQ_07I8oYy5";
+const sb =
+  typeof window !== "undefined" && window.supabase
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
+
+let groupBoard = [];
+
+async function fetchGroupBoard() {
+  if (!sb) return;
+  try {
+    const { data, error } = await sb
+      .from("quest_completions")
+      .select("*")
+      .eq("trip", state.tripName || "default")
+      .order("completed_at", { ascending: false })
+      .limit(50);
+    if (error) return;
+    groupBoard = data || [];
+    if (activeTab === "quests") render();
+  } catch (e) {
+    // offline or unreachable — keep showing whatever we already had
+  }
+}
+
+async function syncQuestCompletion(q) {
+  if (!sb) return;
+  try {
+    await sb.from("quest_completions").insert({
+      trip: state.tripName || "default",
+      camper_name: state.keeperName || "Someone",
+      quest_id: q.id,
+      quest_title: q.title,
+    });
+    fetchGroupBoard();
+  } catch (e) {
+    // offline — the quest is still sealed locally, just not synced yet
+  }
+}
+
+function timeAgo(ts) {
+  const secs = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 const DEFAULT_QUESTS = [
   {
     id: "candid",
@@ -159,6 +210,27 @@ function renderQuests() {
   const tripBanner = !state.tripName
     ? `<div class="empty" style="padding:14px 12px;margin-bottom:16px;border:1px dashed var(--card-border);border-radius:12px;">Name this trip in the <b>Trip</b> tab before you start — it labels every artifact you seal.</div>`
     : "";
+  const nameBanner =
+    state.tripName && !state.keeperName
+      ? `<div class="empty" style="padding:14px 12px;margin-bottom:16px;border:1px dashed var(--card-border);border-radius:12px;">Set your name in the <b>Trip</b> tab so the group scoreboard knows it's you.</div>`
+      : "";
+
+  const boardRows = groupBoard
+    .map(
+      (row) => `
+    <div class="log-row">
+      <span>${escapeHtml(row.camper_name)} — ${escapeHtml(row.quest_title)}</span>
+      <span>${timeAgo(row.completed_at)}</span>
+    </div>`
+    )
+    .join("");
+  const groupBoardSection = sb
+    ? `
+    <h2 class="section-title">🌐 Group scoreboard</h2>
+    <div class="trip-card">
+      ${boardRows || `<div class="empty" style="padding:6px 0;">No completions synced yet.</div>`}
+    </div>`
+    : "";
 
   const cards = active
     .map(
@@ -190,6 +262,7 @@ function renderQuests() {
 
   return `
     ${tripBanner}
+    ${nameBanner}
     <div class="xp-wrap">
       <div class="xp-track"><div class="xp-fill" style="width:${(inLevel / 3) * 100}%"></div></div>
       <div class="xp-label">${done} / ${total} quests sealed into the capsule</div>
@@ -197,6 +270,7 @@ function renderQuests() {
     <h2 class="section-title">Open quests</h2>
     ${cards || `<div class="empty">All quests complete. Go start a new trip in the Trip tab.</div>`}
     ${done_.length ? `<h2 class="section-title">Completed</h2>${doneCards}` : ""}
+    ${groupBoardSection}
   `;
 }
 
@@ -367,7 +441,7 @@ function renderTrip() {
     <div class="trip-card">
       <button class="danger" id="resetBtn">Start a new trip (clears this capsule)</button>
     </div>
-    <div class="empty" style="text-align:left;padding:10px 4px;">This demo saves locally on this phone only — there’s no shared sync between devices yet.</div>
+    <div class="empty" style="text-align:left;padding:10px 4px;">Sealed quests sync to the group scoreboard when you're online. Camp chores and Mafia games stay local to this phone only.</div>
   `;
 }
 
@@ -752,6 +826,7 @@ function renderQuestModal(questId) {
       peeked: years <= 0,
     };
     saveState();
+    syncQuestCompletion(q);
     document.body.removeChild(wrap);
     openQuestId = null;
     render();
@@ -868,6 +943,8 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 });
 
 render();
+fetchGroupBoard();
+setInterval(fetchGroupBoard, 7000);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
