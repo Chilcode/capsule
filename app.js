@@ -14,6 +14,13 @@ let pointEvents = [];
 let pointTotals = {};
 let boardLoaded = false;
 
+// Poll results only trigger a re-render when data actually changed — otherwise
+// every 7s tick replays entrance/reveal animations on unchanged content, which
+// turns intentional motion (the Mafia role pop, card stagger) into noise.
+function jsonEq(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function computeTotals(events) {
   const totals = {};
   events.forEach((e) => {
@@ -32,10 +39,11 @@ async function fetchPointEvents() {
       .order("created_at", { ascending: false })
       .limit(200);
     if (error) return;
+    const changed = !boardLoaded || !jsonEq(pointEvents, data || []);
     pointEvents = data || [];
     pointTotals = computeTotals(pointEvents);
     boardLoaded = true;
-    if (activeTab === "board" || activeTab === "capsule") render();
+    if (changed && (activeTab === "board" || activeTab === "capsule")) render();
   } catch (e) {
     // offline or unreachable — keep showing whatever we already had
   }
@@ -108,8 +116,9 @@ async function fetchMafiaSession() {
       .eq("trip", state.tripName || "default")
       .maybeSingle();
     if (error) return;
+    const changed = !jsonEq(mafiaSession, data || null);
     mafiaSession = data || null;
-    if (activeTab === "mafia") render();
+    if (changed && activeTab === "mafia") render();
   } catch (e) {}
 }
 
@@ -181,8 +190,9 @@ async function fetchQuestArtifacts() {
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) return;
+    const changed = !jsonEq(remoteArtifacts, data || []);
     remoteArtifacts = data || [];
-    if (activeTab === "capsule") render();
+    if (changed && activeTab === "capsule") render();
   } catch (e) {}
 }
 
@@ -196,8 +206,9 @@ async function fetchMafiaGames() {
       .order("created_at", { ascending: false })
       .limit(20);
     if (error) return;
+    const changed = !jsonEq(mafiaHistory, data || []);
     mafiaHistory = data || [];
-    if (activeTab === "mafia") render();
+    if (changed && activeTab === "mafia") render();
   } catch (e) {}
 }
 
@@ -211,8 +222,9 @@ async function fetchFeedback() {
       .order("created_at", { ascending: false })
       .limit(50);
     if (error) return;
+    const changed = !jsonEq(feedbackList, data || []);
     feedbackList = data || [];
-    if (activeTab === "settings") render();
+    if (changed && activeTab === "settings") render();
   } catch (e) {}
 }
 

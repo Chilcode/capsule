@@ -214,8 +214,8 @@ button.ghost {
   color: var(--ink);
 }
 button.danger {
-  background: transparent;
-  border-color: var(--card-border);
+  background: rgba(217, 128, 128, 0.08);
+  border-color: rgba(217, 128, 128, 0.35);
   color: #d98080;
 }
 button:active { transform: scale(0.98); }
@@ -476,15 +476,15 @@ textarea { min-height: 80px; resize: vertical; }
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.quest-card, .chore-row, .artifact-card, .log-row, .title-card {
+.quest-card, .chore-row, .artifact-card, .log-row, .title-card, .stat-row {
   animation: rise-in 0.4s ease both;
 }
-.quest-card:nth-child(1), .chore-row:nth-child(1), .artifact-card:nth-child(1), .title-card:nth-child(1) { animation-delay: 0ms; }
-.quest-card:nth-child(2), .chore-row:nth-child(2), .artifact-card:nth-child(2), .title-card:nth-child(2) { animation-delay: 40ms; }
-.quest-card:nth-child(3), .chore-row:nth-child(3), .artifact-card:nth-child(3), .title-card:nth-child(3) { animation-delay: 80ms; }
-.quest-card:nth-child(4), .chore-row:nth-child(4), .artifact-card:nth-child(4), .title-card:nth-child(4) { animation-delay: 120ms; }
-.quest-card:nth-child(5), .chore-row:nth-child(5), .artifact-card:nth-child(5), .title-card:nth-child(5) { animation-delay: 160ms; }
-.quest-card:nth-child(n+6), .chore-row:nth-child(n+6), .artifact-card:nth-child(n+6), .title-card:nth-child(n+6) { animation-delay: 200ms; }
+.quest-card:nth-child(1), .chore-row:nth-child(1), .artifact-card:nth-child(1), .title-card:nth-child(1), .stat-row:nth-child(1) { animation-delay: 0ms; }
+.quest-card:nth-child(2), .chore-row:nth-child(2), .artifact-card:nth-child(2), .title-card:nth-child(2), .stat-row:nth-child(2) { animation-delay: 40ms; }
+.quest-card:nth-child(3), .chore-row:nth-child(3), .artifact-card:nth-child(3), .title-card:nth-child(3), .stat-row:nth-child(3) { animation-delay: 80ms; }
+.quest-card:nth-child(4), .chore-row:nth-child(4), .artifact-card:nth-child(4), .title-card:nth-child(4), .stat-row:nth-child(4) { animation-delay: 120ms; }
+.quest-card:nth-child(5), .chore-row:nth-child(5), .artifact-card:nth-child(5), .title-card:nth-child(5), .stat-row:nth-child(5) { animation-delay: 160ms; }
+.quest-card:nth-child(n+6), .chore-row:nth-child(n+6), .artifact-card:nth-child(n+6), .title-card:nth-child(n+6), .stat-row:nth-child(n+6) { animation-delay: 200ms; }
 
 /* Motion: the reveal moment — Mafia role card, quest artifact unlock */
 @keyframes reveal-pop {
