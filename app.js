@@ -661,7 +661,7 @@ function renderMafiaReveal(m) {
 
   return `
     <h2 class="section-title">Your role</h2>
-    <div class="trip-card" style="text-align:center;border-color:${isKiller ? "#d98080" : "var(--gold-dim)"};">
+    <div class="trip-card role-card" style="text-align:center;border-color:${isKiller ? "#d98080" : "var(--gold-dim)"};">
       <div style="font-size:2.5em;margin-bottom:6px;">${isKiller ? "🔪" : "👤"}</div>
       <div class="title-name" style="font-size:1.15em;">${isKiller ? "You are a Killer" : "You are a Townsperson"}</div>
       <div class="empty" style="padding:8px 0 16px;">${

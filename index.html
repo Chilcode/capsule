@@ -9,6 +9,9 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -25,12 +28,12 @@
 <main id="app"></main>
 
 <nav class="tabbar">
-  <button class="tab-btn is-active" data-tab="quests">Quests</button>
-  <button class="tab-btn" data-tab="chores">Camp</button>
-  <button class="tab-btn" data-tab="mafia">Mafia</button>
-  <button class="tab-btn" data-tab="capsule">Capsule</button>
-  <button class="tab-btn" data-tab="board">Board</button>
-  <button class="tab-btn" data-tab="settings">Trip</button>
+  <button class="tab-btn is-active" data-tab="quests"><span class="tab-icon">🗝️</span><span class="tab-label">Quests</span></button>
+  <button class="tab-btn" data-tab="chores"><span class="tab-icon">🏕️</span><span class="tab-label">Camp</span></button>
+  <button class="tab-btn" data-tab="mafia"><span class="tab-icon">🔪</span><span class="tab-label">Mafia</span></button>
+  <button class="tab-btn" data-tab="capsule"><span class="tab-icon">⏳</span><span class="tab-label">Capsule</span></button>
+  <button class="tab-btn" data-tab="board"><span class="tab-icon">🌐</span><span class="tab-label">Board</span></button>
+  <button class="tab-btn" data-tab="settings"><span class="tab-icon">⚙️</span><span class="tab-label">Trip</span></button>
 </nav>
 
 <div class="toast" id="toast"></div>
