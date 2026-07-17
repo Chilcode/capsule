@@ -1,0 +1,334 @@
+:root {
+  --bg: #0b1220;
+  --bg-soft: #121b30;
+  --card: #17223d;
+  --card-border: #263257;
+  --ink: #eef1fb;
+  --ink-dim: #9aa4c7;
+  --gold: #e8b45e;
+  --gold-dim: #7a6438;
+  --ok: #6fcf97;
+  --seal: #4a3f6b;
+  --radius: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: radial-gradient(circle at 50% -10%, var(--bg-soft), var(--bg) 60%);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px calc(10px + env(safe-area-inset-top, 0px));
+  padding-top: max(14px, env(safe-area-inset-top, 0px));
+  border-bottom: 1px solid var(--card-border);
+  flex-shrink: 0;
+}
+
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: 0.02em; }
+.brand-mark { color: var(--gold); font-size: 1.2em; }
+.brand-name { font-size: 1.05em; }
+
+.level-badge {
+  font-size: 0.75em;
+  color: var(--gold);
+  border: 1px solid var(--gold-dim);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(232, 180, 94, 0.08);
+}
+
+#app {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabbar {
+  display: flex;
+  border-top: 1px solid var(--card-border);
+  background: var(--bg-soft);
+  flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 13px 8px;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  font-size: 0.9em;
+  font-weight: 600;
+  border-top: 2px solid transparent;
+}
+
+.tab-btn.is-active {
+  color: var(--gold);
+  border-top-color: var(--gold);
+}
+
+/* Progress bar */
+.xp-wrap {
+  margin-bottom: 18px;
+}
+.xp-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  overflow: hidden;
+}
+.xp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+  transition: width 0.4s ease;
+}
+.xp-label {
+  font-size: 0.75em;
+  color: var(--ink-dim);
+  margin-top: 6px;
+}
+
+/* Section titles */
+h2.section-title {
+  font-size: 0.95em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  margin: 22px 0 10px;
+}
+h2.section-title:first-child { margin-top: 0; }
+
+/* Quest cards */
+.quest-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.quest-card.is-complete {
+  opacity: 0.55;
+}
+.quest-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.quest-title {
+  font-weight: 700;
+  font-size: 1.02em;
+}
+.quest-tag {
+  font-size: 0.68em;
+  color: var(--gold);
+  background: rgba(232, 180, 94, 0.1);
+  border-radius: 6px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.quest-desc {
+  color: var(--ink-dim);
+  font-size: 0.88em;
+  margin: 6px 0 12px;
+  line-height: 1.4;
+}
+.quest-actions { display: flex; gap: 8px; }
+
+button.primary, button.ghost, button.danger {
+  font-family: inherit;
+  font-size: 0.88em;
+  font-weight: 600;
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+button.primary {
+  background: var(--gold);
+  color: #201607;
+}
+button.ghost {
+  background: transparent;
+  border-color: var(--card-border);
+  color: var(--ink);
+}
+button.danger {
+  background: transparent;
+  border-color: var(--card-border);
+  color: #d98080;
+}
+button:active { transform: scale(0.98); }
+
+.done-check { color: var(--ok); font-size: 0.85em; }
+
+/* Empty state */
+.empty {
+  color: var(--ink-dim);
+  text-align: center;
+  padding: 40px 16px;
+  font-size: 0.92em;
+  line-height: 1.5;
+}
+
+/* Capsule artifact cards */
+.artifact-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  position: relative;
+}
+.artifact-card.is-sealed { background: linear-gradient(160deg, var(--card), var(--seal)); }
+.artifact-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.artifact-quest { font-weight: 700; }
+.lock-badge {
+  font-size: 0.7em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.artifact-photo {
+  width: 100%;
+  border-radius: 10px;
+  margin: 10px 0;
+  display: block;
+  max-height: 260px;
+  object-fit: cover;
+}
+.artifact-note {
+  font-size: 0.92em;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.artifact-meta {
+  font-size: 0.72em;
+  color: var(--ink-dim);
+  margin-top: 8px;
+}
+.seal-note {
+  font-size: 0.85em;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.peek-btn { margin-top: 10px; }
+
+/* Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 7, 16, 0.72);
+  display: flex;
+  align-items: flex-end;
+  z-index: 20;
+}
+.modal-sheet {
+  width: 100%;
+  background: var(--bg-soft);
+  border-top: 1px solid var(--card-border);
+  border-radius: 20px 20px 0 0;
+  padding: 20px 18px calc(20px + env(safe-area-inset-bottom, 0px));
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.modal-title { font-weight: 700; font-size: 1.1em; margin-bottom: 4px; }
+.modal-sub { color: var(--ink-dim); font-size: 0.88em; margin-bottom: 16px; }
+
+label.field-label {
+  display: block;
+  font-size: 0.78em;
+  color: var(--ink-dim);
+  margin: 14px 0 6px;
+}
+textarea, input[type="text"], input[type="number"] {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  color: var(--ink);
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 0.95em;
+}
+textarea { min-height: 80px; resize: vertical; }
+
+.photo-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.photo-preview {
+  width: 64px; height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid var(--card-border);
+}
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+.modal-actions button { flex: 1; }
+
+/* Settings / trip tab */
+.trip-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--card-border);
+  font-size: 0.9em;
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-val { color: var(--gold); font-weight: 700; }
+
+.toast {
+  position: fixed;
+  bottom: 78px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--gold);
+  color: #201607;
+  font-weight: 700;
+  font-size: 0.85em;
+  padding: 10px 18px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.25s ease;
+  z-index: 30;
+}
+.toast.is-shown {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

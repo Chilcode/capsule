@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Capsule</title>
+<meta name="description" content="A social memory game — quests become artifacts, artifacts become a time capsule.">
+<meta name="theme-color" content="#0b1220">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◈</span>
+    <span class="brand-name">Capsule</span>
+  </div>
+  <div class="level-badge" id="levelBadge">Keeper Lv.1</div>
+</header>
+
+<main id="app"></main>
+
+<nav class="tabbar">
+  <button class="tab-btn is-active" data-tab="quests">Quests</button>
+  <button class="tab-btn" data-tab="capsule">Capsule</button>
+  <button class="tab-btn" data-tab="settings">Trip</button>
+</nav>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
