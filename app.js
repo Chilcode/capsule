@@ -81,6 +81,7 @@ const TITLE_DEFS = [
 let state = loadState();
 let activeTab = "quests";
 let openQuestId = null;
+let mafiaRevealShown = false;
 
 function loadState() {
   try {
@@ -89,6 +90,7 @@ function loadState() {
       const parsed = JSON.parse(raw);
       if (!parsed.campers) parsed.campers = [];
       if (!parsed.choreLog) parsed.choreLog = [];
+      if (parsed.mafia === undefined) parsed.mafia = null;
       return parsed;
     }
   } catch (e) {}
@@ -99,6 +101,7 @@ function loadState() {
     quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
     campers: [],
     choreLog: [],
+    mafia: null,
   };
 }
 
@@ -139,6 +142,7 @@ function render() {
   const app = document.getElementById("app");
   if (activeTab === "quests") app.innerHTML = renderQuests();
   else if (activeTab === "chores") app.innerHTML = renderChores();
+  else if (activeTab === "mafia") app.innerHTML = renderMafia();
   else if (activeTab === "capsule") app.innerHTML = renderCapsule();
   else app.innerHTML = renderTrip();
 
@@ -367,6 +371,199 @@ function renderTrip() {
   `;
 }
 
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function camperName(id) {
+  const c = state.campers.find((x) => x.id === id);
+  return c ? c.name : "Unknown";
+}
+
+function mafiaCheckWin(m) {
+  const aliveKillers = m.aliveIds.filter((id) => m.killerIds.includes(id)).length;
+  const aliveTown = m.aliveIds.length - aliveKillers;
+  if (aliveKillers === 0) return "town";
+  if (aliveKillers >= aliveTown) return "mafia";
+  return null;
+}
+
+function startMafiaGame(killerCount) {
+  const ids = state.campers.map((c) => c.id);
+  state.mafia = {
+    phase: "reveal",
+    round: 1,
+    killerIds: shuffle(ids).slice(0, killerCount),
+    aliveIds: ids.slice(),
+    eliminated: [],
+    revealOrder: shuffle(ids),
+    revealIndex: 0,
+    winner: null,
+  };
+  mafiaRevealShown = false;
+  saveState();
+  render();
+}
+
+function mafiaEliminate(camperId, phase) {
+  const m = state.mafia;
+  m.aliveIds = m.aliveIds.filter((id) => id !== camperId);
+  m.eliminated.push({ camperId, round: m.round, phase, wasKiller: m.killerIds.includes(camperId) });
+  const winner = mafiaCheckWin(m);
+  if (winner) {
+    m.winner = winner;
+    m.phase = "over";
+  } else if (phase === "night") {
+    m.phase = "day";
+  } else {
+    m.phase = "night";
+    m.round += 1;
+  }
+  saveState();
+  render();
+}
+
+function mafiaSkip(phase) {
+  const m = state.mafia;
+  if (phase === "night") {
+    m.phase = "day";
+  } else {
+    m.phase = "night";
+    m.round += 1;
+  }
+  saveState();
+  render();
+}
+
+function renderMafia() {
+  const m = state.mafia;
+  if (!m) return renderMafiaSetup();
+  if (m.phase === "reveal") return renderMafiaReveal(m);
+  if (m.phase === "night") return renderMafiaPhase(m, "night");
+  if (m.phase === "day") return renderMafiaPhase(m, "day");
+  if (m.phase === "over") return renderMafiaOver(m);
+  return renderMafiaSetup();
+}
+
+function renderMafiaSetup() {
+  const count = state.campers.length;
+  const suggested = Math.max(1, Math.round(count / 4)) || 1;
+  const chips =
+    state.campers.map((c) => `<span class="chip">${escapeHtml(c.name)}</span>`).join("") ||
+    `<span class="empty" style="padding:0;">No campers yet — add some in the Camp tab.</span>`;
+  const canStart = count >= 3;
+  return `
+    <h2 class="section-title">Mafia</h2>
+    <div class="trip-card">
+      <div class="chip-row">${chips}</div>
+      <div class="empty" style="text-align:left;padding:10px 0 0;">
+        Some of you are secretly Killers. Pass one phone around — each player privately
+        sees their own role, then hides it and passes it on. Killers try not to get caught;
+        everyone else tries to catch them before it's too late.
+      </div>
+      <label class="field-label">How many Killers?</label>
+      <input type="number" id="mafiaKillerCount" value="${suggested}" min="1" max="${Math.max(1, count - 1)}">
+      <div class="modal-actions">
+        <button class="primary" id="mafiaStartBtn" ${canStart ? "" : "disabled"}>Assign roles &amp; start</button>
+      </div>
+      ${canStart ? "" : `<div class="empty" style="text-align:left;padding:10px 0 0;">Need at least 3 campers — add them in the Camp tab first.</div>`}
+    </div>
+  `;
+}
+
+function renderMafiaReveal(m) {
+  const id = m.revealOrder[m.revealIndex];
+  const name = camperName(id);
+  const isKiller = m.killerIds.includes(id);
+
+  if (!mafiaRevealShown) {
+    return `
+      <h2 class="section-title">Pass the phone</h2>
+      <div class="trip-card" style="text-align:center;">
+        <div class="title-name" style="font-size:1.2em;margin-bottom:10px;">Hand the phone to<br>${escapeHtml(name)}</div>
+        <div class="empty" style="padding:6px 0 16px;">Everyone else look away.</div>
+        <button class="primary" id="mafiaRevealBtn">I'm ${escapeHtml(name)} — show my role</button>
+      </div>
+      <div class="empty" style="text-align:left;padding:14px 4px 0;">${m.revealIndex + 1} of ${m.revealOrder.length} players</div>
+    `;
+  }
+
+  return `
+    <h2 class="section-title">Your role</h2>
+    <div class="trip-card" style="text-align:center;border-color:${isKiller ? "#d98080" : "var(--gold-dim)"};">
+      <div style="font-size:2.5em;margin-bottom:6px;">${isKiller ? "🔪" : "👤"}</div>
+      <div class="title-name" style="font-size:1.15em;">${isKiller ? "You are a Killer" : "You are a Townsperson"}</div>
+      <div class="empty" style="padding:8px 0 16px;">${
+        isKiller
+          ? "Blend in. You and any other Killers secretly choose a target each night."
+          : "Find the Killers before they find you."
+      }</div>
+      <button class="ghost" id="mafiaNextBtn">Hide it — pass to the next player</button>
+    </div>
+  `;
+}
+
+function renderMafiaPhase(m, phaseName) {
+  const isNight = phaseName === "night";
+  const aliveRows = m.aliveIds
+    .map(
+      (id) => `
+    <div class="chore-row">
+      <div class="chore-label">${escapeHtml(camperName(id))}</div>
+      <button class="danger" data-eliminate="${id}">${isNight ? "Killed" : "Voted out"}</button>
+    </div>`
+    )
+    .join("");
+
+  const eliminatedRows = m.eliminated
+    .slice()
+    .reverse()
+    .map(
+      (e) => `
+    <div class="log-row">
+      <span>${escapeHtml(camperName(e.camperId))} — ${e.wasKiller ? "was a Killer 🔪" : "was a Townsperson 👤"} (${e.phase}, round ${e.round})</span>
+    </div>`
+    )
+    .join("");
+
+  return `
+    <h2 class="section-title">Round ${m.round} — ${isNight ? "Night" : "Day"}</h2>
+    <div class="trip-card">
+      <div class="empty" style="text-align:left;padding:0;">
+        ${
+          isNight
+            ? "🌙 Everyone close your eyes. Killers, open yours and silently point to a target."
+            : "☀️ Discuss out loud, then vote someone out — or skip the vote."
+        }
+      </div>
+    </div>
+    <h2 class="section-title">${m.aliveIds.length} alive</h2>
+    ${aliveRows}
+    <div class="trip-card">
+      <button class="ghost" id="mafiaSkipBtn">${isNight ? "No one was killed" : "Skip the vote"}</button>
+    </div>
+    ${eliminatedRows ? `<h2 class="section-title">Eliminated</h2><div class="trip-card">${eliminatedRows}</div>` : ""}
+  `;
+}
+
+function renderMafiaOver(m) {
+  const killers = m.killerIds.map((id) => camperName(id)).join(", ");
+  return `
+    <h2 class="section-title">Game over</h2>
+    <div class="trip-card" style="text-align:center;border-color:${m.winner === "mafia" ? "#d98080" : "var(--gold-dim)"};">
+      <div style="font-size:2.5em;margin-bottom:6px;">${m.winner === "mafia" ? "🔪" : "🏆"}</div>
+      <div class="title-name" style="font-size:1.2em;">${m.winner === "mafia" ? "The Killers win" : "The Townspeople win"}</div>
+      <div class="empty" style="padding:10px 0;">Killers were: ${escapeHtml(killers)}</div>
+      <button class="primary" id="mafiaNewGameBtn">Play again</button>
+    </div>
+  `;
+}
+
 function wireTabContent() {
   document.querySelectorAll("[data-open]").forEach((btn) => {
     btn.onclick = () => {
@@ -409,6 +606,7 @@ function wireTabContent() {
         quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
         campers: [],
         choreLog: [],
+        mafia: null,
       };
       saveState();
       activeTab = "quests";
@@ -443,6 +641,48 @@ function wireTabContent() {
       const name = input.value.trim();
       if (!name) return;
       state.campers.push({ id: `c-${Date.now()}`, name });
+      saveState();
+      render();
+    };
+  }
+
+  const mafiaStartBtn = document.getElementById("mafiaStartBtn");
+  if (mafiaStartBtn) {
+    mafiaStartBtn.onclick = () => {
+      const input = document.getElementById("mafiaKillerCount");
+      const count = Math.max(1, Math.min(state.campers.length - 1, parseInt(input.value, 10) || 1));
+      startMafiaGame(count);
+    };
+  }
+  const mafiaRevealBtn = document.getElementById("mafiaRevealBtn");
+  if (mafiaRevealBtn) {
+    mafiaRevealBtn.onclick = () => {
+      mafiaRevealShown = true;
+      render();
+    };
+  }
+  const mafiaNextBtn = document.getElementById("mafiaNextBtn");
+  if (mafiaNextBtn) {
+    mafiaNextBtn.onclick = () => {
+      const m = state.mafia;
+      m.revealIndex += 1;
+      mafiaRevealShown = false;
+      if (m.revealIndex >= m.revealOrder.length) m.phase = "night";
+      saveState();
+      render();
+    };
+  }
+  document.querySelectorAll("[data-eliminate]").forEach((btn) => {
+    btn.onclick = () => mafiaEliminate(btn.dataset.eliminate, state.mafia.phase);
+  });
+  const mafiaSkipBtn = document.getElementById("mafiaSkipBtn");
+  if (mafiaSkipBtn) {
+    mafiaSkipBtn.onclick = () => mafiaSkip(state.mafia.phase);
+  }
+  const mafiaNewGameBtn = document.getElementById("mafiaNewGameBtn");
+  if (mafiaNewGameBtn) {
+    mafiaNewGameBtn.onclick = () => {
+      state.mafia = null;
       saveState();
       render();
     };
