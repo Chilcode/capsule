@@ -51,6 +51,33 @@ const DEFAULT_QUESTS = [
   },
 ];
 
+const CHORES = [
+  { id: "dishes", label: "Wash the dishes", category: "cleanup" },
+  { id: "tidy-camp", label: "Tidy up the place", category: "cleanup" },
+  { id: "trash-run", label: "Pack out the trash", category: "cleanup" },
+  { id: "police-brass", label: "Police the brass after shooting", category: "cleanup" },
+  { id: "start-fire", label: "Start the fire", category: "fire" },
+  { id: "tend-fire", label: "Keep the fire fed", category: "fire" },
+  { id: "cook-meal", label: "Cook a meal", category: "cook" },
+  { id: "wash-cookware", label: "Scrub the pots and pans", category: "cook" },
+  { id: "haul-water", label: "Haul water", category: "water" },
+  { id: "float-cooler", label: "Load the cooler for the float", category: "logistics" },
+  { id: "ice-run", label: "Ice / beer run", category: "logistics" },
+  { id: "atv-fuel", label: "Fuel up / hose off the four-wheelers", category: "gear" },
+  { id: "set-up-camp", label: "Set up camp / unload gear", category: "setup" },
+  { id: "break-down-camp", label: "Break down camp / load out", category: "setup" },
+];
+
+const TITLE_DEFS = [
+  { category: "cleanup", categoryLabel: "Cleanup", title: "Most Cleanly Camper" },
+  { category: "fire", categoryLabel: "Fire", title: "Fire Keeper" },
+  { category: "cook", categoryLabel: "Cooking", title: "Head Chef" },
+  { category: "water", categoryLabel: "Water", title: "Water Bearer" },
+  { category: "logistics", categoryLabel: "Logistics", title: "Logistics Wizard" },
+  { category: "gear", categoryLabel: "Gear", title: "Gear Head" },
+  { category: "setup", categoryLabel: "Setup", title: "Camp Architect" },
+];
+
 let state = loadState();
 let activeTab = "quests";
 let openQuestId = null;
@@ -58,13 +85,20 @@ let openQuestId = null;
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (!parsed.campers) parsed.campers = [];
+      if (!parsed.choreLog) parsed.choreLog = [];
+      return parsed;
+    }
   } catch (e) {}
   return {
     tripName: "",
     keeperName: "",
     createdAt: Date.now(),
     quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
+    campers: [],
+    choreLog: [],
   };
 }
 
@@ -104,6 +138,7 @@ function render() {
 
   const app = document.getElementById("app");
   if (activeTab === "quests") app.innerHTML = renderQuests();
+  else if (activeTab === "chores") app.innerHTML = renderChores();
   else if (activeTab === "capsule") app.innerHTML = renderCapsule();
   else app.innerHTML = renderTrip();
 
@@ -196,6 +231,118 @@ function renderCapsule() {
     .join("");
 }
 
+function computeLeaderboard() {
+  const totals = {};
+  state.campers.forEach((c) => (totals[c.id] = { total: 0 }));
+  state.choreLog.forEach((entry) => {
+    const chore = CHORES.find((c) => c.id === entry.choreId);
+    if (!chore || !totals[entry.camperId]) return;
+    totals[entry.camperId][chore.category] = (totals[entry.camperId][chore.category] || 0) + 1;
+    totals[entry.camperId].total += 1;
+  });
+  return totals;
+}
+
+function topBy(totals, key) {
+  let max = 0;
+  let names = [];
+  state.campers.forEach((c) => {
+    const count = (totals[c.id] && totals[c.id][key]) || 0;
+    if (count === 0) return;
+    if (count > max) {
+      max = count;
+      names = [c.name];
+    } else if (count === max) {
+      names.push(c.name);
+    }
+  });
+  return max > 0 ? { count: max, names } : null;
+}
+
+function renderChores() {
+  const totals = computeLeaderboard();
+  const mvp = topBy(totals, "total");
+
+  const camperChips =
+    state.campers
+      .map(
+        (c) =>
+          `<span class="chip">${escapeHtml(c.name)} <button class="chip-remove" data-remove-camper="${c.id}">×</button></span>`
+      )
+      .join("") || `<span class="empty" style="padding:0;">No campers yet.</span>`;
+
+  const titleCards = TITLE_DEFS.map((t) => {
+    const leader = topBy(totals, t.category);
+    return `
+      <div class="trip-card title-card">
+        <div>
+          <div class="title-name">${t.title}</div>
+          <div class="title-sub">${t.categoryLabel}</div>
+        </div>
+        <div class="title-holder">${leader ? escapeHtml(leader.names.join(" & ")) + " · " + leader.count : "—"}</div>
+      </div>`;
+  }).join("");
+
+  const choresByCategory = {};
+  CHORES.forEach((c) => {
+    (choresByCategory[c.category] = choresByCategory[c.category] || []).push(c);
+  });
+
+  const choreSections = TITLE_DEFS.map((t) => {
+    const rows = (choresByCategory[t.category] || [])
+      .map(
+        (c) => `
+      <div class="chore-row">
+        <div class="chore-label">${c.label}</div>
+        <button class="primary" data-log-chore="${c.id}">Log</button>
+      </div>`
+      )
+      .join("");
+    return rows ? `<h2 class="section-title">${t.categoryLabel}</h2>${rows}` : "";
+  }).join("");
+
+  const recent = state.choreLog
+    .slice()
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 6)
+    .map((entry) => {
+      const chore = CHORES.find((c) => c.id === entry.choreId);
+      const camper = state.campers.find((c) => c.id === entry.camperId);
+      return `
+      <div class="log-row">
+        <span>${escapeHtml(camper ? camper.name : "someone")} — ${chore ? chore.label : "a chore"}</span>
+        <button class="log-undo" data-undo-log="${entry.id}">undo</button>
+      </div>`;
+    })
+    .join("");
+
+  return `
+    <h2 class="section-title">Titles</h2>
+    <div class="trip-card title-card" style="border-color:var(--gold-dim);">
+      <div>
+        <div class="title-name">MVP Camper</div>
+        <div class="title-sub">Most chores overall</div>
+      </div>
+      <div class="title-holder">${mvp ? escapeHtml(mvp.names.join(" & ")) + " · " + mvp.count : "—"}</div>
+    </div>
+    ${titleCards}
+
+    <h2 class="section-title">Campers</h2>
+    <div class="trip-card">
+      <div class="chip-row">${camperChips}</div>
+      <label class="field-label">Add a camper</label>
+      <div class="photo-input-row">
+        <input type="text" id="newCamperName2" placeholder="Name">
+        <button class="ghost" id="addCamperBtn">Add</button>
+      </div>
+    </div>
+
+    ${choreSections}
+
+    ${recent ? `<h2 class="section-title">Recent</h2><div class="trip-card">${recent}</div>` : ""}
+  `;
+}
+
 function renderTrip() {
   const { done, total, level } = levelInfo();
   return `
@@ -254,15 +401,49 @@ function wireTabContent() {
   const resetBtn = document.getElementById("resetBtn");
   if (resetBtn) {
     resetBtn.onclick = () => {
-      if (!confirm("This clears every quest and artifact on this device. Continue?")) return;
+      if (!confirm("This clears every quest, artifact, camper, and chore log on this device. Continue?")) return;
       state = {
         tripName: "",
         keeperName: "",
         createdAt: Date.now(),
         quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
+        campers: [],
+        choreLog: [],
       };
       saveState();
       activeTab = "quests";
+      render();
+    };
+  }
+
+  document.querySelectorAll("[data-log-chore]").forEach((btn) => {
+    btn.onclick = () => openCamperPicker(btn.dataset.logChore);
+  });
+  document.querySelectorAll("[data-remove-camper]").forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.dataset.removeCamper;
+      state.campers = state.campers.filter((c) => c.id !== id);
+      state.choreLog = state.choreLog.filter((e) => e.camperId !== id);
+      saveState();
+      render();
+    };
+  });
+  document.querySelectorAll("[data-undo-log]").forEach((btn) => {
+    btn.onclick = () => {
+      state.choreLog = state.choreLog.filter((e) => e.id !== btn.dataset.undoLog);
+      saveState();
+      render();
+    };
+  });
+
+  const addCamperBtn = document.getElementById("addCamperBtn");
+  if (addCamperBtn) {
+    addCamperBtn.onclick = () => {
+      const input = document.getElementById("newCamperName2");
+      const name = input.value.trim();
+      if (!name) return;
+      state.campers.push({ id: `c-${Date.now()}`, name });
+      saveState();
       render();
     };
   }
@@ -335,6 +516,69 @@ function renderQuestModal(questId) {
     openQuestId = null;
     render();
     toast("Sealed into the capsule");
+  };
+}
+
+function openCamperPicker(choreId) {
+  const chore = CHORES.find((c) => c.id === choreId);
+  if (!chore) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <div class="modal-title">${chore.label}</div>
+      <div class="modal-sub">Who did it?</div>
+      <div class="chip-row">
+        ${
+          state.campers
+            .map((c) => `<button class="chip" data-pick="${c.id}">${escapeHtml(c.name)}</button>`)
+            .join("") || `<span class="empty" style="padding:0;">No campers yet — add one below.</span>`
+        }
+      </div>
+      <label class="field-label">Add a camper</label>
+      <div class="photo-input-row">
+        <input type="text" id="newCamperName" placeholder="Name">
+        <button class="ghost" id="addCamperInline">Add</button>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" id="pickerCancel">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+
+  function logFor(camperId) {
+    state.choreLog.push({
+      id: `l-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      camperId,
+      choreId,
+      ts: Date.now(),
+    });
+    saveState();
+    document.body.removeChild(wrap);
+    render();
+    const camper = state.campers.find((c) => c.id === camperId);
+    toast(`Logged for ${camper ? camper.name : "camper"}`);
+  }
+
+  wrap.querySelectorAll("[data-pick]").forEach((btn) => {
+    btn.onclick = () => logFor(btn.dataset.pick);
+  });
+
+  wrap.querySelector("#addCamperInline").onclick = () => {
+    const input = wrap.querySelector("#newCamperName");
+    const name = input.value.trim();
+    if (!name) return;
+    state.campers.push({ id: `c-${Date.now()}`, name });
+    saveState();
+    document.body.removeChild(wrap);
+    render();
+    openCamperPicker(choreId);
+  };
+
+  wrap.querySelector("#pickerCancel").onclick = () => {
+    document.body.removeChild(wrap);
   };
 }
 
