@@ -7,37 +7,92 @@ const sb =
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-let groupBoard = [];
+const POINTS = { quest: 10, chore: 3, mafiaWin: 15 };
+const CAPSULE_UNLOCK_COST = 20;
 
-async function fetchGroupBoard() {
+let pointEvents = [];
+let pointTotals = {};
+let boardLoaded = false;
+
+function computeTotals(events) {
+  const totals = {};
+  events.forEach((e) => {
+    totals[e.camper_name] = (totals[e.camper_name] || 0) + e.amount;
+  });
+  return totals;
+}
+
+async function fetchPointEvents() {
   if (!sb) return;
   try {
     const { data, error } = await sb
-      .from("quest_completions")
+      .from("point_events")
       .select("*")
       .eq("trip", state.tripName || "default")
-      .order("completed_at", { ascending: false })
-      .limit(50);
+      .order("created_at", { ascending: false })
+      .limit(200);
     if (error) return;
-    groupBoard = data || [];
-    if (activeTab === "quests") render();
+    pointEvents = data || [];
+    pointTotals = computeTotals(pointEvents);
+    boardLoaded = true;
+    if (activeTab === "board" || activeTab === "capsule") render();
   } catch (e) {
     // offline or unreachable — keep showing whatever we already had
   }
 }
 
-async function syncQuestCompletion(q) {
+async function addPoints(camperName, amount, source, label) {
+  const name = camperName || "Someone";
+  // optimistic local update so it feels instant even before the network round-trip
+  pointTotals[name] = (pointTotals[name] || 0) + amount;
+  pointEvents = [
+    { camper_name: name, amount, source, label, created_at: new Date().toISOString() },
+    ...pointEvents,
+  ];
   if (!sb) return;
   try {
-    await sb.from("quest_completions").insert({
+    await sb.from("point_events").insert({
+      trip: state.tripName || "default",
+      camper_name: name,
+      amount,
+      source,
+      label,
+    });
+    fetchPointEvents();
+  } catch (e) {
+    // offline — points still counted locally, will drift back in sync once reconnected
+  }
+}
+
+async function syncQuestArtifact(q) {
+  if (!sb) return;
+  try {
+    await sb.from("quest_artifacts").insert({
       trip: state.tripName || "default",
       camper_name: state.keeperName || "Someone",
       quest_id: q.id,
       quest_title: q.title,
+      note: q.artifact.note || null,
+      photo: q.artifact.photo || null,
+      unlock_at: new Date(q.artifact.unlockAt).toISOString(),
     });
-    fetchGroupBoard();
   } catch (e) {
-    // offline — the quest is still sealed locally, just not synced yet
+    // offline — the memory is still safe locally, just not backed up yet
+  }
+}
+
+async function syncMafiaGame(m) {
+  if (!sb) return;
+  try {
+    await sb.from("mafia_games").insert({
+      trip: state.tripName || "default",
+      players: state.campers.map((c) => ({ name: c.name, role: m.killerIds.includes(c.id) ? "killer" : "town" })),
+      eliminated: m.eliminated.map((e) => ({ name: camperName(e.camperId), round: e.round, phase: e.phase, wasKiller: e.wasKiller })),
+      winner: m.winner,
+      rounds: m.round,
+    });
+  } catch (e) {
+    // offline — game result stays local only for now
   }
 }
 
@@ -195,6 +250,7 @@ function render() {
   else if (activeTab === "chores") app.innerHTML = renderChores();
   else if (activeTab === "mafia") app.innerHTML = renderMafia();
   else if (activeTab === "capsule") app.innerHTML = renderCapsule();
+  else if (activeTab === "board") app.innerHTML = renderBoard();
   else app.innerHTML = renderTrip();
 
   wireTabContent();
@@ -215,30 +271,13 @@ function renderQuests() {
       ? `<div class="empty" style="padding:14px 12px;margin-bottom:16px;border:1px dashed var(--card-border);border-radius:12px;">Set your name in the <b>Trip</b> tab so the group scoreboard knows it's you.</div>`
       : "";
 
-  const boardRows = groupBoard
-    .map(
-      (row) => `
-    <div class="log-row">
-      <span>${escapeHtml(row.camper_name)} — ${escapeHtml(row.quest_title)}</span>
-      <span>${timeAgo(row.completed_at)}</span>
-    </div>`
-    )
-    .join("");
-  const groupBoardSection = sb
-    ? `
-    <h2 class="section-title">🌐 Group scoreboard</h2>
-    <div class="trip-card">
-      ${boardRows || `<div class="empty" style="padding:6px 0;">No completions synced yet.</div>`}
-    </div>`
-    : "";
-
   const cards = active
     .map(
       (q) => `
     <div class="quest-card">
       <div class="quest-title-row">
         <span class="quest-title">${q.title}</span>
-        <span class="quest-tag">${q.tag}</span>
+        <span class="quest-tag">+${POINTS.quest} · ${q.tag}</span>
       </div>
       <div class="quest-desc">${q.desc}</div>
       <div class="quest-actions">
@@ -270,7 +309,6 @@ function renderQuests() {
     <h2 class="section-title">Open quests</h2>
     ${cards || `<div class="empty">All quests complete. Go start a new trip in the Trip tab.</div>`}
     ${done_.length ? `<h2 class="section-title">Completed</h2>${doneCards}` : ""}
-    ${groupBoardSection}
   `;
 }
 
@@ -301,7 +339,7 @@ function renderCapsule() {
         `
             : `
           <div class="seal-note">Sealed by ${escapeHtml(a.by) || "a keeper"} on ${fmtDate(a.completedAt)}. Come back on the unlock date to open it.</div>
-          <button class="ghost peek-btn" data-peek="${q.id}">Peek anyway (demo only)</button>
+          <button class="ghost peek-btn" data-spend="${q.id}">Spend ${CAPSULE_UNLOCK_COST} points to open early</button>
         `
         }
       </div>`;
@@ -372,7 +410,7 @@ function renderChores() {
         (c) => `
       <div class="chore-row">
         <div class="chore-label">${c.label}</div>
-        <button class="primary" data-log-chore="${c.id}">Log</button>
+        <button class="primary" data-log-chore="${c.id}">+${POINTS.chore} · Log</button>
       </div>`
       )
       .join("");
@@ -421,6 +459,53 @@ function renderChores() {
   `;
 }
 
+const SOURCE_ICON = { quest: "🗝️", chore: "🏕️", mafia: "🔪", capsule_spend: "🔓" };
+
+function renderBoard() {
+  if (!sb) {
+    return `<div class="empty">The scoreboard needs a connection to load. It'll show up here once you're online.</div>`;
+  }
+  if (!boardLoaded) {
+    return `<div class="empty">Loading the group scoreboard…</div>`;
+  }
+
+  const ranked = Object.entries(pointTotals).sort((a, b) => b[1] - a[1]);
+  const leaderRows = ranked
+    .map(
+      ([name, total], i) => `
+    <div class="stat-row">
+      <span>${i === 0 && total > 0 ? "👑 " : ""}${escapeHtml(name)}</span>
+      <span class="stat-val">${total} pts</span>
+    </div>`
+    )
+    .join("");
+
+  const feedRows = pointEvents
+    .slice(0, 30)
+    .map(
+      (e) => `
+    <div class="log-row">
+      <span>${SOURCE_ICON[e.source] || "•"} ${escapeHtml(e.camper_name)} — ${escapeHtml(e.label)}</span>
+      <span>${e.amount > 0 ? "+" : ""}${e.amount} · ${timeAgo(e.created_at)}</span>
+    </div>`
+    )
+    .join("");
+
+  return `
+    <h2 class="section-title">🌐 Group scoreboard</h2>
+    <div class="empty" style="text-align:left;padding:0 0 14px;">
+      Everyone on this trip, everyone's phone. Earn points from Quests, Camp chores, and Mafia — spend them in Capsule to open a sealed memory early.
+    </div>
+    <div class="trip-card">
+      ${leaderRows || `<div class="empty" style="padding:6px 0;">No points yet — go complete something.</div>`}
+    </div>
+    <h2 class="section-title">Activity</h2>
+    <div class="trip-card">
+      ${feedRows || `<div class="empty" style="padding:6px 0;">Nothing logged yet.</div>`}
+    </div>
+  `;
+}
+
 function renderTrip() {
   const { done, total, level } = levelInfo();
   return `
@@ -441,7 +526,7 @@ function renderTrip() {
     <div class="trip-card">
       <button class="danger" id="resetBtn">Start a new trip (clears this capsule)</button>
     </div>
-    <div class="empty" style="text-align:left;padding:10px 4px;">Sealed quests sync to the group scoreboard when you're online. Camp chores and Mafia games stay local to this phone only.</div>
+    <div class="empty" style="text-align:left;padding:10px 4px;">Points from Quests, Camp chores, and Mafia sync to everyone's phone when you're online — check the <b>Board</b> tab. Sealed memories (notes/photos) and Mafia game results are also backed up to the cloud so this whole trip survives even if this phone doesn't. The camper list itself is still local to each device.</div>
   `;
 }
 
@@ -492,6 +577,13 @@ function mafiaEliminate(camperId, phase) {
   if (winner) {
     m.winner = winner;
     m.phase = "over";
+    const winningIds = state.campers
+      .map((c) => c.id)
+      .filter((id) => (winner === "mafia" ? m.killerIds.includes(id) : !m.killerIds.includes(id)));
+    winningIds.forEach((id) => {
+      addPoints(camperName(id), POINTS.mafiaWin, "mafia", winner === "mafia" ? "Killers won the round" : "Town found the Killers");
+    });
+    syncMafiaGame(m);
   } else if (phase === "night") {
     m.phase = "day";
   } else {
@@ -645,13 +737,8 @@ function wireTabContent() {
       render();
     };
   });
-  document.querySelectorAll("[data-peek]").forEach((btn) => {
-    btn.onclick = () => {
-      const q = state.quests.find((x) => x.id === btn.dataset.peek);
-      q.artifact.peeked = true;
-      saveState();
-      render();
-    };
+  document.querySelectorAll("[data-spend]").forEach((btn) => {
+    btn.onclick = () => openSpendPicker(btn.dataset.spend);
   });
 
   const tripInput = document.getElementById("tripNameInput");
@@ -826,11 +913,12 @@ function renderQuestModal(questId) {
       peeked: years <= 0,
     };
     saveState();
-    syncQuestCompletion(q);
+    addPoints(state.keeperName || "Someone", POINTS.quest, "quest", q.title);
+    syncQuestArtifact(q);
     document.body.removeChild(wrap);
     openQuestId = null;
     render();
-    toast("Sealed into the capsule");
+    toast(`Sealed into the capsule (+${POINTS.quest} pts)`);
   };
 }
 
@@ -871,10 +959,11 @@ function openCamperPicker(choreId) {
       ts: Date.now(),
     });
     saveState();
+    const camper = state.campers.find((c) => c.id === camperId);
+    addPoints(camper ? camper.name : "Someone", POINTS.chore, "chore", chore.label);
     document.body.removeChild(wrap);
     render();
-    const camper = state.campers.find((c) => c.id === camperId);
-    toast(`Logged for ${camper ? camper.name : "camper"}`);
+    toast(`Logged for ${camper ? camper.name : "camper"} (+${POINTS.chore} pts)`);
   }
 
   wrap.querySelectorAll("[data-pick]").forEach((btn) => {
@@ -893,6 +982,65 @@ function openCamperPicker(choreId) {
   };
 
   wrap.querySelector("#pickerCancel").onclick = () => {
+    document.body.removeChild(wrap);
+  };
+}
+
+function openSpendPicker(questId) {
+  const q = state.quests.find((x) => x.id === questId);
+  if (!q) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <div class="modal-title">Spend ${CAPSULE_UNLOCK_COST} points</div>
+      <div class="modal-sub">Whose points are paying to open "${escapeHtml(q.title)}" early?</div>
+      <div class="chip-row">
+        ${
+          state.campers
+            .map((c) => `<button class="chip" data-pick="${c.id}">${escapeHtml(c.name)} · ${pointTotals[c.name] || 0} pts</button>`)
+            .join("") || `<span class="empty" style="padding:0;">No campers yet — add one below.</span>`
+        }
+      </div>
+      <label class="field-label">Or type a name</label>
+      <div class="photo-input-row">
+        <input type="text" id="spendName" placeholder="Name">
+        <button class="ghost" id="spendConfirm">Spend</button>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" id="spendCancel">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+
+  function trySpend(name) {
+    const balance = pointTotals[name] || 0;
+    if (balance < CAPSULE_UNLOCK_COST) {
+      toast(`${name} only has ${balance} points — needs ${CAPSULE_UNLOCK_COST}`);
+      return;
+    }
+    addPoints(name, -CAPSULE_UNLOCK_COST, "capsule_spend", `Opened "${q.title}" early`);
+    q.artifact.peeked = true;
+    saveState();
+    document.body.removeChild(wrap);
+    render();
+    toast(`Opened early — ${CAPSULE_UNLOCK_COST} points spent`);
+  }
+
+  wrap.querySelectorAll("[data-pick]").forEach((btn) => {
+    const c = state.campers.find((x) => x.id === btn.dataset.pick);
+    btn.onclick = () => trySpend(c.name);
+  });
+
+  wrap.querySelector("#spendConfirm").onclick = () => {
+    const name = wrap.querySelector("#spendName").value.trim();
+    if (!name) return;
+    trySpend(name);
+  };
+
+  wrap.querySelector("#spendCancel").onclick = () => {
     document.body.removeChild(wrap);
   };
 }
@@ -943,8 +1091,8 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 });
 
 render();
-fetchGroupBoard();
-setInterval(fetchGroupBoard, 7000);
+fetchPointEvents();
+setInterval(fetchPointEvents, 7000);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
