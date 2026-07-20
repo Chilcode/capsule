@@ -72,18 +72,27 @@ async function addPoints(camperName, amount, source, label) {
   }
 }
 
-async function syncQuestArtifact(q) {
+async function syncQuestArtifact(entry, questTitle) {
   if (!sb) return;
   try {
-    await sb.from("quest_artifacts").insert({
-      trip: state.tripName || "default",
-      camper_name: state.keeperName || "Someone",
-      quest_id: q.id,
-      quest_title: q.title,
-      note: q.artifact.note || null,
-      photo: q.artifact.photo || null,
-      unlock_at: new Date(q.artifact.unlockAt).toISOString(),
-    });
+    const { data, error } = await sb
+      .from("quest_artifacts")
+      .insert({
+        trip: state.tripName || "default",
+        camper_name: entry.by || "Someone",
+        quest_id: entry.questId,
+        quest_title: questTitle,
+        note: entry.note || null,
+        photo: entry.media || null,
+        unlock_at: new Date(entry.unlockAt).toISOString(),
+      })
+      .select()
+      .single();
+    if (!error && data) {
+      // remember the remote row id so the Capsule merge can skip echoing our own insert back
+      entry.remoteId = data.id;
+      saveState();
+    }
   } catch (e) {
     // offline — the memory is still safe locally, just not backed up yet
   }
@@ -401,12 +410,28 @@ function loadState() {
       if (!parsed.choreLog) parsed.choreLog = [];
       if (!parsed.peekedRemote) parsed.peekedRemote = [];
       delete parsed.mafia;
-      if (parsed.quests) {
-        const existingIds = new Set(parsed.quests.map((q) => q.id));
-        DEFAULT_QUESTS.forEach((q) => {
-          if (!existingIds.has(q.id)) parsed.quests.push({ ...q, status: "available", artifact: null });
-        });
+      if (!parsed.questLog) {
+        // migrate from the old one-artifact-per-quest model to a repeatable log —
+        // preserves anything already sealed locally instead of losing it
+        parsed.questLog = [];
+        if (Array.isArray(parsed.quests)) {
+          parsed.quests.forEach((q) => {
+            if (q.artifact) {
+              parsed.questLog.push({
+                id: `ql-${q.id}-${q.artifact.completedAt || Date.now()}`,
+                questId: q.id,
+                note: q.artifact.note,
+                media: q.artifact.photo || null,
+                by: q.artifact.by,
+                completedAt: q.artifact.completedAt,
+                unlockAt: q.artifact.unlockAt,
+                peeked: q.artifact.peeked,
+              });
+            }
+          });
+        }
       }
+      delete parsed.quests;
       return parsed;
     }
   } catch (e) {}
@@ -414,7 +439,7 @@ function loadState() {
     tripName: "",
     keeperName: "",
     createdAt: Date.now(),
-    quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
+    questLog: [],
     campers: [],
     choreLog: [],
     peekedRemote: [],
@@ -422,7 +447,11 @@ function loadState() {
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    toast("This phone's storage is full — still backed up to the cloud if you're online, just not cached here");
+  }
 }
 
 function toast(msg) {
@@ -433,16 +462,47 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove("is-shown"), 1800);
 }
 
-function completedCount() {
-  return state.quests.filter((q) => q.status === "complete").length;
-}
-
 function levelInfo() {
-  const done = completedCount();
-  const total = state.quests.length;
+  const done = state.questLog.length;
   const level = 1 + Math.floor(done / 3);
   const inLevel = done % 3;
-  return { done, total, level, pct: total ? (done / total) * 100 : 0, inLevel };
+  return { done, level, inLevel };
+}
+
+const MEDIA_SIZE_CAP = 5 * 1024 * 1024; // keeps localStorage + Postgres inserts safe
+
+function processMedia(file) {
+  if (file.type.startsWith("image/")) return compressImage(file);
+  if (file.size > MEDIA_SIZE_CAP) {
+    return Promise.reject(
+      new Error(`That file is ${Math.round(file.size / 1024 / 1024)}MB — keep attachments under 5MB for now.`)
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = () => reject(new Error("Couldn't read that file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function mediaKind(dataUrl) {
+  if (!dataUrl) return null;
+  const m = /^data:([^;]+);/.exec(dataUrl);
+  const mime = m ? m[1] : "";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  return "file";
+}
+
+function mediaHtml(dataUrl, cssClass) {
+  const kind = mediaKind(dataUrl);
+  if (!kind) return "";
+  if (kind === "image") return `<img class="${cssClass}" src="${dataUrl}" alt="">`;
+  if (kind === "audio") return `<audio controls src="${dataUrl}" style="width:100%;margin:10px 0;"></audio>`;
+  if (kind === "video") return `<video controls src="${dataUrl}" class="${cssClass}" style="width:100%;"></video>`;
+  return `<div class="empty" style="padding:6px 0;">📎 File attached.</div>`;
 }
 
 function fmtDate(ts) {
@@ -469,9 +529,7 @@ function render() {
 }
 
 function renderQuests() {
-  const { done, total, pct, level, inLevel } = levelInfo();
-  const active = state.quests.filter((q) => q.status !== "complete");
-  const done_ = state.quests.filter((q) => q.status === "complete");
+  const { done, level, inLevel } = levelInfo();
 
   const tripBanner = !state.tripName
     ? `<div class="empty" style="padding:14px 12px;margin-bottom:16px;border:1px dashed var(--card-border);border-radius:12px;">Name this trip in the <b>Trip</b> tab before you start — it labels every artifact you seal.</div>`
@@ -481,9 +539,9 @@ function renderQuests() {
       ? `<div class="empty" style="padding:14px 12px;margin-bottom:16px;border:1px dashed var(--card-border);border-radius:12px;">Set your name in the <b>Trip</b> tab so the group scoreboard knows it's you.</div>`
       : "";
 
-  const cards = active
-    .map(
-      (q) => `
+  const cards = DEFAULT_QUESTS.map((q) => {
+    const count = state.questLog.filter((e) => e.questId === q.id).length;
+    return `
     <div class="quest-card">
       <div class="quest-title-row">
         <span class="quest-title">${q.title}</span>
@@ -491,22 +549,24 @@ function renderQuests() {
       </div>
       <div class="quest-desc">${q.desc}</div>
       <div class="quest-actions">
-        <button class="primary" data-open="${q.id}">Complete quest</button>
+        <button class="primary" data-open="${q.id}">${count ? "Do it again" : "Complete quest"}</button>
+        ${count ? `<span class="done-check">✓ sealed ${count}×</span>` : ""}
       </div>
-    </div>`
-    )
-    .join("");
+    </div>`;
+  }).join("");
 
-  const doneCards = done_
-    .map(
-      (q) => `
-    <div class="quest-card is-complete">
-      <div class="quest-title-row">
-        <span class="quest-title">${q.title}</span>
-        <span class="done-check">✓ sealed</span>
-      </div>
-    </div>`
-    )
+  const recent = state.questLog
+    .slice()
+    .sort((a, b) => b.completedAt - a.completedAt)
+    .slice(0, 6)
+    .map((e) => {
+      const q = DEFAULT_QUESTS.find((x) => x.id === e.questId);
+      return `
+    <div class="log-row">
+      <span>${escapeHtml(q ? q.title : "a quest")} — ${escapeHtml(e.by || "someone")}</span>
+      <button class="log-undo" data-undo-quest="${e.id}">undo</button>
+    </div>`;
+    })
     .join("");
 
   return `
@@ -514,44 +574,44 @@ function renderQuests() {
     ${nameBanner}
     <div class="xp-wrap">
       <div class="xp-track"><div class="xp-fill" style="width:${(inLevel / 3) * 100}%"></div></div>
-      <div class="xp-label">${done} / ${total} quests sealed into the capsule</div>
+      <div class="xp-label">${done} memor${done === 1 ? "y" : "ies"} sealed into the capsule</div>
     </div>
-    <h2 class="section-title">Open quests</h2>
-    ${cards || `<div class="empty">All quests complete. Go start a new trip in the Trip tab.</div>`}
-    ${done_.length ? `<h2 class="section-title">Completed</h2>${doneCards}` : ""}
+    <h2 class="section-title">Quests — repeat any of these anytime</h2>
+    ${cards}
+    ${recent ? `<h2 class="section-title">Recently sealed</h2><div class="trip-card">${recent}</div>` : ""}
   `;
 }
 
 function renderCapsule() {
   const now = Date.now();
 
-  const localItems = state.quests
-    .filter((q) => q.artifact)
-    .map((q) => ({
-      title: q.title,
-      by: q.artifact.by || "a keeper",
-      note: q.artifact.note,
-      photo: q.artifact.photo,
-      unlockAt: q.artifact.unlockAt,
-      completedAt: q.artifact.completedAt,
-      sealed: q.artifact.unlockAt > now,
-      peeked: q.artifact.peeked,
-      spendTarget: q.id,
-    }));
+  const localItems = state.questLog.map((e) => {
+    const q = DEFAULT_QUESTS.find((x) => x.id === e.questId);
+    return {
+      title: q ? q.title : "a quest",
+      by: e.by || "a keeper",
+      note: e.note,
+      media: e.media,
+      unlockAt: e.unlockAt,
+      completedAt: e.completedAt,
+      sealed: e.unlockAt > now,
+      peeked: e.peeked,
+      spendTarget: e.id,
+    };
+  });
 
-  const mine = new Set(
-    state.quests.filter((q) => q.artifact).map((q) => `${state.keeperName}::${q.id}`)
-  );
+  // skip remote rows that are just the synced echo of something we already sealed locally
+  const localRemoteIds = new Set(state.questLog.filter((e) => e.remoteId).map((e) => e.remoteId));
 
   const remoteItems = remoteArtifacts
-    .filter((a) => !mine.has(`${a.camper_name}::${a.quest_id}`))
+    .filter((a) => !localRemoteIds.has(a.id))
     .map((a) => {
       const unlockAt = new Date(a.unlock_at).getTime();
       return {
         title: a.quest_title,
         by: a.camper_name,
         note: a.note,
-        photo: a.photo,
+        media: a.photo,
         unlockAt,
         completedAt: new Date(a.created_at).getTime(),
         sealed: unlockAt > now,
@@ -578,7 +638,7 @@ function renderCapsule() {
         ${
           showContent
             ? `
-          ${a.photo ? `<img class="artifact-photo" src="${a.photo}" alt="">` : ""}
+          ${mediaHtml(a.media, "artifact-photo")}
           <div class="artifact-note">${escapeHtml(a.note) || "<i>No note left.</i>"}</div>
           <div class="artifact-meta">${escapeHtml(a.by)} · ${state.tripName || "Untitled trip"} · sealed ${fmtDate(a.completedAt)}</div>
         `
@@ -752,7 +812,7 @@ function renderBoard() {
 }
 
 function renderTrip() {
-  const { done, total, level } = levelInfo();
+  const { done, level } = levelInfo();
   const feedbackRows = feedbackList
     .slice(0, 15)
     .map(
@@ -774,7 +834,7 @@ function renderTrip() {
     <h2 class="section-title">Progress</h2>
     <div class="trip-card">
       <div class="stat-row"><span>Keeper level</span><span class="stat-val">${level}</span></div>
-      <div class="stat-row"><span>Quests sealed</span><span class="stat-val">${done} / ${total}</span></div>
+      <div class="stat-row"><span>Memories sealed</span><span class="stat-val">${done}</span></div>
       <div class="stat-row"><span>Started</span><span class="stat-val">${fmtDate(state.createdAt)}</span></div>
     </div>
     <h2 class="section-title">Feedback</h2>
@@ -1053,7 +1113,7 @@ function wireTabContent() {
         tripName: "",
         keeperName: "",
         createdAt: Date.now(),
-        quests: DEFAULT_QUESTS.map((q) => ({ ...q, status: "available", artifact: null })),
+        questLog: [],
         campers: [],
         choreLog: [],
         peekedRemote: [],
@@ -1081,6 +1141,13 @@ function wireTabContent() {
   document.querySelectorAll("[data-undo-log]").forEach((btn) => {
     btn.onclick = () => {
       state.choreLog = state.choreLog.filter((e) => e.id !== btn.dataset.undoLog);
+      saveState();
+      render();
+    };
+  });
+  document.querySelectorAll("[data-undo-quest]").forEach((btn) => {
+    btn.onclick = () => {
+      state.questLog = state.questLog.filter((e) => e.id !== btn.dataset.undoQuest);
       saveState();
       render();
     };
@@ -1120,7 +1187,7 @@ function closeAnyModal() {
 }
 
 function renderQuestModal(questId) {
-  const q = state.quests.find((x) => x.id === questId);
+  const q = DEFAULT_QUESTS.find((x) => x.id === questId);
   if (!q) {
     openQuestId = null;
     return;
@@ -1136,11 +1203,11 @@ function renderQuestModal(questId) {
       <label class="field-label">What happened?</label>
       <textarea id="artNote" placeholder="Enough detail that it makes sense in 10 years..."></textarea>
 
-      <label class="field-label">Photo (optional)</label>
+      <label class="field-label">Photo, video, audio, or any file (optional)</label>
       <div class="photo-input-row">
-        <input type="file" accept="image/*" capture="environment" id="artPhoto">
-        <img id="photoPreview" class="photo-preview" style="display:none;">
+        <input type="file" accept="image/*,video/*,audio/*" id="artMedia">
       </div>
+      <div id="mediaPreviewWrap"></div>
 
       <label class="field-label">Unlock in (years)</label>
       <input type="number" id="artYears" value="10" min="0" max="30">
@@ -1153,15 +1220,20 @@ function renderQuestModal(questId) {
   `;
   document.body.appendChild(wrap);
 
-  let photoDataUrl = null;
-  const photoInput = wrap.querySelector("#artPhoto");
-  const preview = wrap.querySelector("#photoPreview");
-  photoInput.onchange = async () => {
-    const file = photoInput.files[0];
+  let mediaDataUrl = null;
+  const mediaInput = wrap.querySelector("#artMedia");
+  const previewWrap = wrap.querySelector("#mediaPreviewWrap");
+  mediaInput.onchange = async () => {
+    const file = mediaInput.files[0];
     if (!file) return;
-    photoDataUrl = await compressImage(file);
-    preview.src = photoDataUrl;
-    preview.style.display = "block";
+    try {
+      mediaDataUrl = await processMedia(file);
+    } catch (err) {
+      toast(err.message || "Couldn't attach that file");
+      mediaInput.value = "";
+      return;
+    }
+    previewWrap.innerHTML = mediaHtml(mediaDataUrl, "photo-preview");
   };
 
   wrap.querySelector("#modalCancel").onclick = () => {
@@ -1173,18 +1245,20 @@ function renderQuestModal(questId) {
     const note = wrap.querySelector("#artNote").value.trim();
     const years = parseFloat(wrap.querySelector("#artYears").value) || 0;
     const now = Date.now();
-    q.status = "complete";
-    q.artifact = {
+    const entry = {
+      id: `ql-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      questId: q.id,
       note,
-      photo: photoDataUrl,
-      by: state.keeperName,
+      media: mediaDataUrl,
+      by: state.keeperName || "Someone",
       completedAt: now,
       unlockAt: now + years * 365.25 * 24 * 60 * 60 * 1000,
       peeked: years <= 0,
     };
+    state.questLog.push(entry);
     saveState();
     addPoints(state.keeperName || "Someone", POINTS.quest, "quest", q.title);
-    syncQuestArtifact(q);
+    syncQuestArtifact(entry, q.title);
     document.body.removeChild(wrap);
     openQuestId = null;
     render();
@@ -1257,10 +1331,10 @@ function openCamperPicker(choreId) {
 function openSpendPicker(target) {
   const isRemote = typeof target === "string" && target.indexOf("remote:") === 0;
   const remoteId = isRemote ? target.slice(7) : null;
-  const q = isRemote ? null : state.quests.find((x) => x.id === target);
+  const entry = isRemote ? null : state.questLog.find((e) => e.id === target);
   const remoteArt = isRemote ? remoteArtifacts.find((a) => a.id === remoteId) : null;
-  if (!q && !remoteArt) return;
-  const title = isRemote ? remoteArt.quest_title : q.title;
+  if (!entry && !remoteArt) return;
+  const title = isRemote ? remoteArt.quest_title : (DEFAULT_QUESTS.find((q) => q.id === entry.questId) || {}).title || "a quest";
   closeAnyModal();
 
   const wrap = document.createElement("div");
@@ -1298,7 +1372,7 @@ function openSpendPicker(target) {
     if (isRemote) {
       state.peekedRemote.push(remoteId);
     } else {
-      q.artifact.peeked = true;
+      entry.peeked = true;
     }
     saveState();
     document.body.removeChild(wrap);
